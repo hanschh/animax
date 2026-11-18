@@ -1,0 +1,6 @@
+{
+  "name": "animax",
+  "description": "A plugin to animate claude code when working with it.",
+  "version": "1.0.0",
+  "author": { "name": "Duph" }
+}
