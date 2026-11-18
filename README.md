@@ -57,15 +57,23 @@ Until it runs, animax shows ASCII art instead.
 /plugin install animax@hanschh
 ```
 
-## Load it
+That is all you need: Claude Code downloads the plugin itself, so there is no
+path to set. Start a new chat afterwards.
+
+## Development (load from a local clone)
+
+Only for working on animax itself. Replace the path with wherever you cloned
+the repo, on any drive or OS.
 
 - **Terminal**: `claude --plugin-dir /path/to/animax`
 - **VS Code chat (and terminal)**: add this to `~/.claude/settings.json`, then
   start a new chat:
 
   ```json
-  { "env": { "CLAUDE_CODE_PLUGIN_DIRS": "d:\\path\\to\\animax" } }
+  { "env": { "CLAUDE_CODE_PLUGIN_DIRS": "/path/to/animax" } }
   ```
+
+  On Windows, escape the backslashes, e.g. `"C:\\Users\\you\\animax"`.
 
 ## Terminal extras (any Claude Code version)
 
