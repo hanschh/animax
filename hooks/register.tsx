@@ -11,7 +11,7 @@
 // Without built assets (assets/video.mjs is null) it falls back to ASCII art.
 
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, Timer } from 'claude-code'
+import type { EngineInterface, Register, RenderChildren, Timer } from 'claude-code'
 
 import { VIDEO } from '../assets/video.mjs'
 import type { VideoClip } from '../assets/video.mjs'
@@ -24,7 +24,7 @@ const TICK_MS = VIDEO ? Math.round(1000 / VIDEO.fps) : 250
 const AUDIO_SETTLE_MS = 400 // ignore states that flick past faster than this
 const IDLE: AnimaxStatus = { state: 'idle', detail: '' }
 const WIDGET_PX = 72 // editor height of the bot in a small widget seat
-const PANE_PX = 128 // editor height of the bot in the pane
+const PANE_PX = 96 // editor height of the bot in the pane
 
 const status = atom({ plugin: 'animax', key: 'status' } as const, IDLE)
 const frame = atom({ plugin: 'animax', key: 'frame' } as const, 0)
@@ -357,35 +357,35 @@ export const register: Register = (on, opts) => {
     const now = await read($, status)
     const m = META[now.state]
     const clip = VIDEO?.states[now.state]
+    const isIdle = now.state === 'idle'
 
-    const caption = (
-      <Text>
+    // Bot on the left, what it is doing on the right: one short row.
+    const side = (
+      <Box flexDirection="column">
         <Text bold color={m.color}>
           {m.label.toUpperCase()}
         </Text>
-        <Text dimColor> {now.detail}</Text>
-      </Text>
+        <Text dimColor>{isIdle ? 'waiting for your prompt' : now.detail}</Text>
+      </Box>
+    )
+    const row = (art: RenderChildren) => (
+      <Box flexDirection="row" alignItems="center" gap={2}>
+        {art}
+        {side}
+      </Box>
     )
 
     if (clip && e.surface === 'terminal') {
       const { Raster } = $.ui.resolve({ ...e, surface: 'terminal' as const })
       const n = await read($, frame)
-      return (
-        <Box flexDirection="column">
-          <Raster key="animax-pane" columns={clip.large.w} rows={clip.large.h / 2} cells={cellsFor(now.state, clip, 'large', n)} />
-          {caption}
-        </Box>
+      return row(
+        <Raster key="animax-pane" columns={clip.large.w} rows={clip.large.h / 2} cells={cellsFor(now.state, clip, 'large', n)} />,
       )
     }
     if (clip && e.surface !== 'mobile') {
       const { Svg } = $.ui.resolve({ ...e, surface: e.surface === 'desktop' ? 'desktop' : 'vscode' })
       const px = e.props.placement === 'widget' ? WIDGET_PX : PANE_PX
-      return (
-        <Box flexDirection="column">
-          <Svg source={clip.svg} alt={`animax: ${m.label}`} {...editorSize(clip, px)} />
-          {caption}
-        </Box>
-      )
+      return row(<Svg source={clip.svg} alt={`animax: ${m.label}`} {...editorSize(clip, px)} />)
     }
 
     // No assets, or a surface without images: ASCII art.
@@ -397,16 +397,14 @@ export const register: Register = (on, opts) => {
         </Text>
       )
     }
-    return (
+    return row(
       <Box flexDirection="column">
-        {pick(FRAMES[now.state], n).map((row: string) => (
+        {pick(FRAMES[now.state], n).map((r: string) => (
           <Text mono color={m.color}>
-            {row}
+            {r}
           </Text>
         ))}
-        <Text> </Text>
-        {caption}
-      </Box>
+      </Box>,
     )
   })
 }

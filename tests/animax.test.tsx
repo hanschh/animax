@@ -98,13 +98,23 @@ test('position below puts the animation under the spinner line', { options: { po
   await ui.unmount()
 })
 
-test('the pane draws the character with its label, on every surface', async ($, on) => {
+test('the pane draws the character with its label beside it, on every surface', async ($, on) => {
   engine(on)
   await $.tool.call({ tool: 'Write', file_path: '/x/hello.js', content: '' })
 
   for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
-    expect(await ui.find({ type: 'Text', text: /COOKING CODE/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'COOKING CODE' })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+test('an idle pane says it is waiting', async ($, on) => {
+  engine(on)
+  for (const surface of ['terminal', 'vscode'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ type: 'Text', text: 'IDLE' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'waiting for your prompt' })).toBeDefined()
     await ui.unmount()
   }
 })
