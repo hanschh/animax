@@ -1,6 +1,7 @@
 <p align="center">
   <img src="assets/icon.svg" alt="animax pixel-bot cooking code" width="120" style="image-rendering: pixelated">
 </p>
+
 # animax
 
 A pixel-bot shows what Claude Code is doing: **thinking**, **planning**, **coding**
