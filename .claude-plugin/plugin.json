@@ -1,6 +1,28 @@
 {
   "name": "animax",
   "description": "A plugin to animate claude code when working with it.",
-  "version": "1.0.0",
-  "author": { "name": "Duph" }
+  "version": "1.2.0",
+  "author": {
+    "name": "Duph"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "sound": {
+      "type": "boolean",
+      "title": "animax sound",
+      "description": "Play each state's soundtrack while Claude works (/animax mute or /animax unmute).",
+      "default": true
+    },
+    "position": {
+      "type": "string",
+      "title": "animax position",
+      "description": "Draw the animation above or below the Thinking… line.",
+      "options": [
+        "above",
+        "below"
+      ],
+      "default": "above"
+    }
+  }
 }

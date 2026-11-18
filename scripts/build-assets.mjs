@@ -1,0 +1,328 @@
+#!/usr/bin/env node
+// animax asset builder: turns the pixel-bot videos into what the plugin draws.
+//
+//   node scripts/build-assets.mjs [videoDir] [--keep-bg] [--synthetic]
+//
+// videoDir    defaults to ../video next to the plugin folder
+// --keep-bg   keep the video's background instead of making it transparent
+// --synthetic write generated test frames (no ffmpeg, no audio), for tests
+//
+// Needs ffmpeg: on PATH, or point FFMPEG at the executable.
+//
+// Writes:
+//   assets/video.mjs          palette-indexed frames + an animated SVG per state
+//   assets/audio/<state>.wav  each video's soundtrack (mono 22 kHz PCM)
+//   build/preview/<state>.png contact sheet to eyeball the result
+//
+// Run it again whenever a video changes. The plugin needs no ffmpeg at runtime.
+
+import { spawnSync } from 'node:child_process'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import zlib from 'node:zlib'
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const args = process.argv.slice(2)
+const flags = new Set(args.filter(a => a.startsWith('--')))
+const VIDEO_DIR = path.resolve(args.find(a => !a.startsWith('--')) ?? path.join(ROOT, '..', 'video'))
+const FFMPEG = process.env.FFMPEG || 'ffmpeg'
+
+const FPS = 8
+const SECONDS = 4
+const FRAMES = FPS * SECONDS
+const SIZES = { small: 24, large: 48 } // pixels; the terminal shows 2 pixels per row
+const MAX_COLORS = 63 // + index 0, which is "transparent"
+const BG_TOLERANCE = 48 // RGB distance from the corner colour that counts as background
+const SVG_LIMIT = 131072 // characters an Svg element accepts
+
+// The videos, one per state. pixel-bot-loops.mp4 (all states joined) is not used.
+const SOURCES = {
+  idle: 'pixel-bot-idle.mp4',
+  thinking: 'pixel-bot-thinking.mp4',
+  planning: 'pixel-bot-planning.mp4',
+  coding: 'pixel-bot-cooking-code.mp4',
+  testing: 'pixel-bot-testing-code.mp4',
+}
+
+// ─── decoding ───────────────────────────────────────────────────────────────
+
+function ffmpeg(argv, what) {
+  const run = spawnSync(FFMPEG, ['-v', 'error', ...argv], { maxBuffer: 256 * 1024 * 1024 })
+  if (run.error) {
+    throw new Error(`cannot run ffmpeg (${run.error.code}). Install it or set FFMPEG=path\\to\\ffmpeg.exe`)
+  }
+  if (run.status !== 0) throw new Error(`ffmpeg failed on ${what}: ${run.stderr.toString().trim()}`)
+  return run.stdout
+}
+
+/** RGB frames of one video at `size`×`size`, area-averaged like a pixel artist would. */
+function decode(file, size) {
+  const raw = ffmpeg(
+    ['-i', file, '-vf', `fps=${FPS},scale=${size}:${size}:flags=area`, '-frames:v', String(FRAMES),
+      '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'],
+    path.basename(file),
+  )
+  const per = size * size * 3
+  const frames = []
+  for (let o = 0; o + per <= raw.length; o += per) frames.push(raw.subarray(o, o + per))
+  if (frames.length === 0) throw new Error(`no frames decoded from ${file}`)
+  return frames
+}
+
+function hasAudio(file) {
+  const run = spawnSync(FFMPEG, ['-hide_banner', '-i', file], { encoding: 'utf8' })
+  return /Stream #.*Audio:/.test(run.stderr || '')
+}
+
+function extractAudio(file, out) {
+  ffmpeg(['-y', '-i', file, '-vn', '-ac', '1', '-ar', '22050', '-c:a', 'pcm_s16le', out], path.basename(file))
+}
+
+/** Test pattern: a bouncing square whose colour depends on the state. */
+function synthetic(state, size) {
+  const hue = { idle: [120, 120, 140], thinking: [200, 80, 220], planning: [70, 120, 240], coding: [240, 190, 40], testing: [40, 210, 210] }[state]
+  const frames = []
+  for (let f = 0; f < FRAMES; f++) {
+    const buf = Buffer.alloc(size * size * 3)
+    const s = Math.floor(size / 3)
+    const x0 = Math.floor(((Math.sin((f / FRAMES) * Math.PI * 2) + 1) / 2) * (size - s))
+    const y0 = Math.floor(size / 2 - s / 2)
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const i = (y * size + x) * 3
+        const inside = x >= x0 && x < x0 + s && y >= y0 && y < y0 + s
+        const c = inside ? hue : [20, 20, 30] // background
+        buf[i] = c[0]; buf[i + 1] = c[1]; buf[i + 2] = c[2]
+      }
+    }
+    frames.push(buf)
+  }
+  return frames
+}
+
+// ─── colour reduction ───────────────────────────────────────────────────────
+
+const dist2 = (a, b) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2
+
+/** The most common colour among the corner pixels of the first frame. */
+function cornerColour(frame, size) {
+  const counts = new Map()
+  const k = Math.max(1, Math.floor(size / 8))
+  for (const [cx, cy] of [[0, 0], [size - k, 0], [0, size - k], [size - k, size - k]]) {
+    for (let y = cy; y < cy + k; y++) {
+      for (let x = cx; x < cx + k; x++) {
+        const i = (y * size + x) * 3
+        const key = (frame[i] << 16) | (frame[i + 1] << 8) | frame[i + 2]
+        counts.set(key, (counts.get(key) || 0) + 1)
+      }
+    }
+  }
+  const best = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0]
+  return [(best >> 16) & 255, (best >> 8) & 255, best & 255]
+}
+
+/** Popularity quantiser over 4-bit-per-channel buckets: palette of at most MAX_COLORS. */
+function buildPalette(frameSets, bg) {
+  const buckets = new Map()
+  for (const frames of frameSets) {
+    for (const f of frames) {
+      for (let i = 0; i < f.length; i += 3) {
+        const c = [f[i], f[i + 1], f[i + 2]]
+        if (bg && dist2(c, bg) <= BG_TOLERANCE ** 2) continue
+        const key = ((c[0] >> 4) << 8) | ((c[1] >> 4) << 4) | (c[2] >> 4)
+        const b = buckets.get(key) || { n: 0, r: 0, g: 0, b: 0 }
+        b.n++; b.r += c[0]; b.g += c[1]; b.b += c[2]
+        buckets.set(key, b)
+      }
+    }
+  }
+  return [...buckets.values()]
+    .sort((a, b) => b.n - a.n)
+    .slice(0, MAX_COLORS)
+    .map(b => [Math.round(b.r / b.n), Math.round(b.g / b.n), Math.round(b.b / b.n)])
+}
+
+function indexFrames(frames, palette, bg) {
+  const cache = new Map()
+  return frames.map(f => {
+    const out = new Uint8Array(f.length / 3)
+    for (let p = 0, i = 0; i < f.length; i += 3, p++) {
+      const c = [f[i], f[i + 1], f[i + 2]]
+      if (bg && dist2(c, bg) <= BG_TOLERANCE ** 2) { out[p] = 0; continue }
+      const key = (c[0] << 16) | (c[1] << 8) | c[2]
+      let best = cache.get(key)
+      if (best === undefined) {
+        best = 0
+        let bestD = Infinity
+        palette.forEach((q, j) => {
+          const d = dist2(c, q)
+          if (d < bestD) { bestD = d; best = j + 1 }
+        })
+        cache.set(key, best)
+      }
+      out[p] = best
+    }
+    return out
+  })
+}
+
+// ─── PNG + SVG ──────────────────────────────────────────────────────────────
+
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+  let c = n
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+  return c >>> 0
+})
+function crc32(buf) {
+  let c = 0xffffffff
+  for (const b of buf) c = CRC_TABLE[(c ^ b) & 255] ^ (c >>> 8)
+  return (c ^ 0xffffffff) >>> 0
+}
+function chunk(type, data) {
+  const len = Buffer.alloc(4); len.writeUInt32BE(data.length)
+  const td = Buffer.concat([Buffer.from(type, 'ascii'), data])
+  const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(td))
+  return Buffer.concat([len, td, crc])
+}
+/** Indexed PNG (colour type 3) with index 0 fully transparent. */
+function encodePng(width, height, indices, palette) {
+  const ihdr = Buffer.alloc(13)
+  ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4)
+  ihdr[8] = 8; ihdr[9] = 3; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0
+  const plte = Buffer.from([0, 0, 0, ...palette.flat()])
+  const trns = Buffer.from([0]) // index 0 alpha 0; the rest default to opaque
+  const rows = Buffer.alloc((width + 1) * height)
+  for (let y = 0; y < height; y++) {
+    rows[y * (width + 1)] = 0
+    for (let x = 0; x < width; x++) rows[y * (width + 1) + 1 + x] = indices[y * width + x]
+  }
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr), chunk('PLTE', plte), chunk('tRNS', trns),
+    chunk('IDAT', zlib.deflateSync(rows, { level: 9 })), chunk('IEND', Buffer.alloc(0)),
+  ])
+}
+
+/** All frames side by side in one strip. */
+function strip(frames, size) {
+  const w = size * frames.length
+  const out = new Uint8Array(w * size)
+  frames.forEach((f, n) => {
+    for (let y = 0; y < size; y++) out.set(f.subarray(y * size, y * size + size), y * w + n * size)
+  })
+  return { width: w, height: size, indices: out }
+}
+
+/** A sprite strip slid by a stepped CSS animation: plays in the editor with no redraws. */
+function animatedSvg(frames, size, palette, fps) {
+  const s = strip(frames, size)
+  const png = encodePng(s.width, s.height, s.indices, palette).toString('base64')
+  const secs = (frames.length / fps).toFixed(3)
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">` +
+    `<style>@keyframes s{to{transform:translateX(-${s.width}px)}}` +
+    `image{animation:s ${secs}s steps(${frames.length}) infinite;image-rendering:pixelated}</style>` +
+    `<image width="${s.width}" height="${size}" href="data:image/png;base64,${png}"/></svg>`
+  )
+}
+
+/** Contact sheet: 8 frames per row, each scaled 4×, for a quick look. */
+function previewPng(frames, size, palette) {
+  const cols = 8, scale = 4
+  const rows = Math.ceil(frames.length / cols)
+  const W = cols * size * scale, H = rows * size * scale
+  const out = new Uint8Array(W * H)
+  frames.forEach((f, n) => {
+    const ox = (n % cols) * size * scale, oy = Math.floor(n / cols) * size * scale
+    for (let y = 0; y < size * scale; y++) {
+      for (let x = 0; x < size * scale; x++) {
+        out[(oy + y) * W + ox + x] = f[Math.floor(y / scale) * size + Math.floor(x / scale)]
+      }
+    }
+  })
+  // Draw transparency as a checkerboard so it is visible in the preview.
+  const pal = [...palette, [200, 200, 200], [150, 150, 150]]
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (out[y * W + x] === 0) out[y * W + x] = ((x >> 3) + (y >> 3)) % 2 ? pal.length - 1 : pal.length
+    }
+  }
+  return encodePng(W, H, out, pal)
+}
+
+// ─── main ───────────────────────────────────────────────────────────────────
+
+function main() {
+  const isSynthetic = flags.has('--synthetic')
+  const keepBg = flags.has('--keep-bg')
+  const audioDir = path.join(ROOT, 'assets', 'audio')
+  const previewDir = path.join(ROOT, 'build', 'preview')
+  fs.mkdirSync(audioDir, { recursive: true })
+  fs.mkdirSync(previewDir, { recursive: true })
+
+  const states = {}
+  for (const [state, file] of Object.entries(SOURCES)) {
+    const src = path.join(VIDEO_DIR, file)
+    if (!isSynthetic && !fs.existsSync(src)) throw new Error(`missing video: ${src}`)
+
+    const rgb = {}
+    for (const [k, size] of Object.entries(SIZES)) rgb[k] = isSynthetic ? synthetic(state, size) : decode(src, size)
+
+    const bg = keepBg ? null : cornerColour(rgb.large[0], SIZES.large)
+    const palette = buildPalette([rgb.small, rgb.large], bg)
+    const idx = {
+      small: indexFrames(rgb.small, palette, bg),
+      large: indexFrames(rgb.large, palette, bg),
+    }
+
+    // Keep the SVG under the element's limit by dropping every other frame if needed.
+    let svgFrames = idx.large, svgFps = FPS
+    let svg = animatedSvg(svgFrames, SIZES.large, palette, svgFps)
+    while (svg.length > SVG_LIMIT && svgFrames.length > 2) {
+      svgFrames = svgFrames.filter((_, i) => i % 2 === 0)
+      svgFps /= 2
+      svg = animatedSvg(svgFrames, SIZES.large, palette, svgFps)
+    }
+
+    let audio = null
+    const wav = path.join(audioDir, `${state}.wav`)
+    if (!isSynthetic && hasAudio(src)) {
+      extractAudio(src, wav)
+      audio = `assets/audio/${state}.wav`
+    } else if (fs.existsSync(wav)) {
+      fs.unlinkSync(wav)
+    }
+
+    fs.writeFileSync(path.join(previewDir, `${state}.png`), previewPng(idx.large, SIZES.large, palette))
+
+    states[state] = {
+      audio,
+      palette: palette.map(([r, g, b]) => (r << 16) | (g << 8) | b),
+      small: { size: SIZES.small, frames: idx.small.map(f => Buffer.from(f).toString('base64')) },
+      large: { size: SIZES.large, frames: idx.large.map(f => Buffer.from(f).toString('base64')) },
+      svg,
+    }
+    console.log(
+      `${state.padEnd(9)} ${idx.large.length} frames, ${palette.length} colours, ` +
+        `bg ${bg ? `rgb(${bg.join(',')}) -> transparent` : 'kept'}, svg ${(svg.length / 1024).toFixed(0)} KB` +
+        `${svgFrames.length < idx.large.length ? ` (${svgFrames.length} frames)` : ''}, audio ${audio ? 'yes' : 'no'}`,
+    )
+  }
+
+  const header =
+    '// Generated by scripts/build-assets.mjs. Do not edit; run the script again.\n' +
+    `// Source: ${isSynthetic ? 'synthetic test pattern' : 'pixel-bot videos'}\n`
+  const body = `export const VIDEO = ${JSON.stringify({ fps: FPS, states })}\n`
+  const out = path.join(ROOT, 'assets', 'video.mjs')
+  fs.writeFileSync(out, header + body)
+  console.log(`\nwrote ${path.relative(ROOT, out)} (${(fs.statSync(out).size / 1024).toFixed(0)} KB)`)
+  console.log(`previews in ${path.relative(ROOT, previewDir)}`)
+}
+
+try {
+  main()
+} catch (err) {
+  console.error(`animax build-assets: ${err.message}`)
+  process.exit(1)
+}

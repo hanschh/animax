@@ -1,55 +1,59 @@
 ---
 name: animax
-description: Set up, preview, or troubleshoot the animax ASCII terminal animations (thinking / planning / coding / testing). Use when the user asks to enable the animax status line, open the animation pane, run the demo, or asks why the animation is not showing.
+description: Set up, preview, or troubleshoot the animax ASCII animations (thinking / planning / coding / testing) in Claude Code's terminal and VS Code chat. Use when the user asks to show or hide the animax pane, enable the animax status line or watch pane, run the demo, or asks why the animation is not showing.
 ---
 
 # animax
 
 animax shows an ASCII character that reacts to what Claude Code is doing:
 
-| State      | Trigger (hook)                                                                 | Animation                       |
-|------------|--------------------------------------------------------------------------------|---------------------------------|
-| `thinking` | `UserPromptSubmit`, `PostToolUse`, Read/Grep/Glob/Web tools, plain shell commands | Character with thought bubbles  |
-| `planning` | `TodoWrite`, `EnterPlanMode`/`ExitPlanMode`, Plan subagent                       | Ticking off a blueprint         |
-| `coding`   | `Write`/`Edit`/`MultiEdit`/`NotebookEdit`, build/install shell commands          | Cooking code in a steaming pot  |
-| `testing`  | Shell commands that match test/lint/typecheck/debug                              | Hunting a bug with a magnifier  |
-| `idle`     | `SessionStart`, `Stop`, `SessionEnd`                                             | Sleeping                        |
+| State      | Trigger                                                                           | Animation                      |
+|------------|-----------------------------------------------------------------------------------|--------------------------------|
+| `thinking` | a submitted prompt, a finished tool, Read/Grep/Glob/Web tools, plain shell commands | character with thought bubbles |
+| `planning` | `TodoWrite`, `EnterPlanMode`/`ExitPlanMode`, the Plan subagent                    | ticking off a blueprint        |
+| `coding`   | `Write`/`Edit`/`MultiEdit`/`NotebookEdit`, build/install shell commands           | cooking code in a steaming pot |
+| `testing`  | shell commands that match test/lint/typecheck/debug                               | hunting a bug with a magnifier |
+| `idle`     | the turn ends                                                                     | sleeping                       |
 
-The hooks only write a small JSON state file to `<os tmpdir>/animax/`. They print
-nothing, so Claude Code's own spinner text ("Thinking…", "Analyzing…",
-"Flibbertigibbeting…") and the transcript are never touched. Rendering happens in
-one of two places that Claude Code does not draw into.
+## In the app (terminal and VS Code chat)
 
-The animator lives at `${CLAUDE_PLUGIN_ROOT}/scripts/animator.js`.
+These come from `hooks/register.tsx`, a hooks module that runs inside Claude Code
+2.1.32x or newer:
 
-## Enable the one-line status line
+- **Spinner**: while a turn runs, the pixel-bot video for the current state plays
+  above Claude Code's own "Thinking…" line, or below it with `position: below`.
+  The line itself is left untouched. The terminal draws the video as truecolor
+  half blocks. VS Code draws it as an animated SVG.
+- **`/animax`**: shows or hides a pane with a larger bot.
+- **Sound**: each state's soundtrack loops while that state lasts. `/animax mute`
+  and `/animax unmute` change the `sound` option, which is also in `/config`.
+  On Windows the sound is played by PowerShell's `SoundPlayer`. On macOS it is
+  played by `$.audio.play`.
 
-1. Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/animator.js" config` and show the user
-   the printed snippet. It has the absolute path to the script.
-2. Ask before you edit `~/.claude/settings.json`. Merge the `statusLine` key into
-   that file. If the file already has a `statusLine`, keep the old value and tell
-   the user that it will be replaced.
-3. The status line updates whenever Claude Code refreshes it, for example on new
-   messages and tool calls. Each refresh shows the next frame.
+The video frames come from `scripts/build-assets.mjs`. If
+`assets/video.mjs` still holds `VIDEO = null`, the user has not built them yet.
+Point them to `node scripts/build-assets.mjs`, which needs ffmpeg. Until they
+build, animax shows ASCII art.
 
-## Full-size animation in a side pane
+## Terminal fallbacks (any Claude Code version)
 
-Tell the user to open a second terminal next to Claude Code, for example a VS Code
-split terminal, a Windows Terminal split pane (Alt+Shift+D), or a tmux pane. Then
-run:
+The command hooks in `hooks/hooks.json` write the state to `<os tmpdir>/animax/`.
+`${CLAUDE_PLUGIN_ROOT}/scripts/animator.js` reads that state:
 
-```
-node "<plugin root>/scripts/animator.js" watch
-```
-
-This uses the alternate screen buffer and hides the cursor. Ctrl+C restores the
-terminal. To preview every state without a live session, run `... animator.js demo`.
+- **Status line**: run `node "${CLAUDE_PLUGIN_ROOT}/scripts/animator.js" config`
+  and show the user the snippet. Ask before you merge it into
+  `~/.claude/settings.json`. If a `statusLine` already exists, tell the user it
+  will be replaced.
+- **Watch pane**: in a second terminal, run `node <plugin>/scripts/animator.js watch`.
+  It uses the alternate screen buffer, and Ctrl+C restores the terminal.
+- **Demo**: `node <plugin>/scripts/animator.js demo` cycles through every state.
 
 ## Troubleshooting
 
-- Check the current state with `node animator.js set thinking` (or another
-  state) while `watch` is running. The pane should change within 100 ms.
-- If nothing changes during a session, look at `<tmpdir>/animax/current.json`.
-  If the file is missing, the hooks are not running. Check `/hooks` and confirm
-  that `node` is on PATH.
-- Set `NO_COLOR=1` to turn off ANSI colours.
+- If the spinner shows no face, check that the plugin loaded and that the
+  Claude Code version has hooks modules. Look for `animax` lines in
+  `claude --debug`.
+- If the watch pane does not change, check whether
+  `<tmpdir>/animax/current.json` updates during a turn. If it does not, the
+  command hooks are not running. Check `/hooks`, and check that `node` is on PATH.
+- `NO_COLOR=1` turns off ANSI colours in the terminal animator.
