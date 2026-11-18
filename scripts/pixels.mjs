@@ -36,24 +36,41 @@ export function toBase64(bytes) {
   return s
 }
 
+/** Run-length decode [count, value] pairs (count 1..255) into `length` bytes. */
+export function unrle(packed, length) {
+  const out = new Uint8Array(length)
+  let o = 0
+  for (let i = 0; i + 1 < packed.length && o < length; i += 2) {
+    const end = Math.min(length, o + packed[i])
+    out.fill(packed[i + 1], o, end)
+    o = end
+  }
+  return out
+}
+
+/** A stored frame (base64 of RLE pairs) back to w*h palette indices. */
+export function frameIndices(stored, width, height) {
+  return unrle(fromBase64(stored), width * height)
+}
+
 const UPPER = 0x2580 // ▀
 const LOWER = 0x2584 // ▄
 const SPACE = 0x20
 const DEFAULT = 0x01000000 // the terminal's own colour (Raster encoding)
 
 /**
- * One frame as cell triplets [codePoint, fg, bg], `size` columns by size/2 rows.
+ * One frame as cell triplets [codePoint, fg, bg], `width` columns by height/2 rows.
  * Transparent pixels (index 0) take the terminal's default colour.
  */
-export function frameCells(indices, size, palette) {
-  const rows = size >> 1
-  const out = new Uint32Array(size * rows * 3)
+export function frameCells(indices, width, height, palette) {
+  const rows = height >> 1
+  const out = new Uint32Array(width * rows * 3)
   const col = i => (i === 0 ? DEFAULT : palette[i - 1])
   for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < size; c++) {
-      const top = indices[2 * r * size + c]
-      const bot = indices[(2 * r + 1) * size + c]
-      const o = (r * size + c) * 3
+    for (let c = 0; c < width; c++) {
+      const top = indices[2 * r * width + c]
+      const bot = indices[(2 * r + 1) * width + c]
+      const o = (r * width + c) * 3
       if (top === 0 && bot === 0) {
         out[o] = SPACE; out[o + 1] = DEFAULT; out[o + 2] = DEFAULT
       } else if (top === 0) {
@@ -67,8 +84,8 @@ export function frameCells(indices, size, palette) {
 }
 
 /** Raster `cells`: little-endian u32 triplets, base64. */
-export function rasterCells(indices, size, palette) {
-  const words = frameCells(indices, size, palette)
+export function rasterCells(indices, width, height, palette) {
+  const words = frameCells(indices, width, height, palette)
   const bytes = new Uint8Array(words.length * 4)
   for (let i = 0; i < words.length; i++) {
     const w = words[i]
@@ -81,15 +98,15 @@ export function rasterCells(indices, size, palette) {
 }
 
 /** The same frame as ANSI truecolor lines, for a plain terminal. */
-export function ansiLines(indices, size, palette) {
-  const words = frameCells(indices, size, palette)
+export function ansiLines(indices, width, height, palette) {
+  const words = frameCells(indices, width, height, palette)
   const lines = []
   const rgb = v => `${(v >> 16) & 255};${(v >> 8) & 255};${v & 255}`
-  for (let r = 0; r < size >> 1; r++) {
+  for (let r = 0; r < height >> 1; r++) {
     let line = ''
     let lastFg = -1, lastBg = -1 // emit a colour only when it changes
-    for (let c = 0; c < size; c++) {
-      const o = (r * size + c) * 3
+    for (let c = 0; c < width; c++) {
+      const o = (r * width + c) * 3
       const [cp, fg, bg] = [words[o], words[o + 1], words[o + 2]]
       if (fg !== lastFg) line += fg === DEFAULT ? '\x1b[39m' : `\x1b[38;2;${rgb(fg)}m`
       if (bg !== lastBg) line += bg === DEFAULT ? '\x1b[49m' : `\x1b[48;2;${rgb(bg)}m`

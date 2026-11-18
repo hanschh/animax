@@ -204,11 +204,11 @@ function runWatch({ demo = false, session = null } = {}) {
 
     let buf = `${ESC}H`; // home, then overwrite in place: no flicker, no scroll
     buf += `${fit(` ${bold('animax')} ${dim('· Ctrl+C to quit')}`)}${ESC}K\n${ESC}K\n`;
-    if (clip && cols >= clip.large.size + 2) {
+    if (clip && cols >= clip.large.w + 2) {
       // Video frame as truecolor half blocks (2 pixels per cell).
       const frames = clip.large.frames;
       const i = Math.floor(now / (1000 / video.fps)) % frames.length;
-      for (const line of pixels.ansiLines(pixels.fromBase64(frames[i]), clip.large.size, clip.palette)) {
+      for (const line of pixels.ansiLines(pixels.frameIndices(frames[i], clip.large.w, clip.large.h), clip.large.w, clip.large.h, clip.palette)) {
         buf += `  ${line}${ESC}K\n`;
       }
     } else {

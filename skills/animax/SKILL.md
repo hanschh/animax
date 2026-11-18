@@ -20,11 +20,14 @@ animax shows an ASCII character that reacts to what Claude Code is doing:
 These come from `hooks/register.tsx`, a hooks module that runs inside Claude Code
 2.1.32x or newer:
 
-- **Spinner**: while a turn runs, the pixel-bot video for the current state plays
-  above Claude Code's own "Thinking…" line, or below it with `position: below`.
-  The line itself is left untouched. The terminal draws the video as truecolor
-  half blocks. VS Code draws it as an animated SVG.
-- **`/animax`**: shows or hides a pane with a larger bot.
+- **Terminal spinner**: while a turn runs, the pixel-bot video for the current
+  state plays above Claude Code's own "Thinking…" line, or below it with
+  `position: below`. The line itself is left untouched. The video is drawn as
+  truecolor half blocks.
+- **VS Code / desktop**: the spinner is left alone. The bot is drawn as an
+  animated SVG in its own animax pane. The pane opens by itself, and after the
+  user closes it, stays closed for that session.
+- **`/animax`**: shows or hides the pane on any surface.
 - **Sound**: each state's soundtrack loops while that state lasts. `/animax mute`
   and `/animax unmute` change the `sound` option, which is also in `/config`.
   On Windows the sound is played by PowerShell's `SoundPlayer`. On macOS it is

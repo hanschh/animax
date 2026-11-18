@@ -1,11 +1,11 @@
 // animax in-app animation, for the terminal and the VS Code chat alike.
 //
-// - Spinner: the pixel-bot video of the current state is drawn above (or,
+// - Terminal: the pixel-bot video of the current state is drawn above (or,
 //   with `position: below`, under) Claude Code's own "Thinking…" line, which
-//   is kept exactly as the engine draws it.
-//   terminal: a Raster of half-block cells, one video frame per tick
-//   VS Code / desktop: a self-animating SVG sprite (no per-frame redraws)
-// - /animax: toggles a pane with the large version.
+//   is kept exactly as the engine draws it: a Raster of half-block cells.
+// - VS Code / desktop: the spinner is left alone; the bot lives in its own
+//   pane, opened by itself, as a self-animating SVG sprite.
+// - /animax: shows or hides that pane (anywhere).
 // - /animax mute | unmute: the soundtrack of each state, looped while it lasts.
 //
 // Without built assets (assets/video.mjs is null) it falls back to ASCII art.
@@ -16,20 +16,21 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 import { VIDEO } from '../assets/video.mjs'
 import type { VideoClip } from '../assets/video.mjs'
 import { ACTIVE_HOLD_MS, ACTIVE_STATES, FRAMES, META, MINI, classifyTool, pick } from '../scripts/core.mjs'
-import { fromBase64, rasterCells } from '../scripts/pixels.mjs'
+import { frameIndices, rasterCells } from '../scripts/pixels.mjs'
 import type { AnimaxState, AnimaxStatus } from '../types'
 
 const PANE = 'animax'
 const TICK_MS = VIDEO ? Math.round(1000 / VIDEO.fps) : 250
 const AUDIO_SETTLE_MS = 400 // ignore states that flick past faster than this
 const IDLE: AnimaxStatus = { state: 'idle', detail: '' }
-const SPINNER_PX = 72 // editor size of the spinner video
-const PANE_PX = 192 // editor size of the pane video
+const WIDGET_PX = 72 // editor height of the bot in a small widget seat
+const PANE_PX = 128 // editor height of the bot in the pane
 
 const status = atom({ plugin: 'animax', key: 'status' } as const, IDLE)
 const frame = atom({ plugin: 'animax', key: 'frame' } as const, 0)
 const isPaneOpen = atom({ plugin: 'animax', key: 'isPaneOpen' } as const, false)
 const isWorking = atom({ plugin: 'animax', key: 'isWorking' } as const, false)
+const isPaneDismissed = atom({ plugin: 'animax', key: 'isPaneDismissed' } as const, false)
 
 type Options = { sound: boolean; position: 'above' | 'below' }
 
@@ -84,6 +85,20 @@ async function closePane($: EngineInterface) {
   await $.ui.close({ id: PANE })
   await update($, isPaneOpen, () => false)
   await syncTicker($)
+}
+
+const EDITOR_SURFACES: readonly string[] = ['vscode', 'desktop']
+
+/** In the editor the bot lives in a pane: open it unless the person closed it. */
+async function openForEditor($: EngineInterface) {
+  try {
+    const surfaces = await $.session.surfaces()
+    if (!surfaces.some(s => EDITOR_SURFACES.includes(s))) return
+    if ((await read($, isPaneOpen)) || (await read($, isPaneDismissed))) return
+    await openPane($)
+  } catch {
+    // decorative
+  }
 }
 
 /** After a tool: back to "analyzing", unless something newer happened. */
@@ -168,10 +183,16 @@ function cellsFor(state: AnimaxState, clip: VideoClip, which: 'small' | 'large',
   const key = `${state}:${which}:${i}`
   let cells = cellCache.get(key)
   if (cells === undefined) {
-    cells = rasterCells(fromBase64(frames[i]!), clip[which].size, clip.palette)
+    const { w, h } = clip[which]
+    cells = rasterCells(frameIndices(frames[i]!, w, h), w, h, clip.palette)
     cellCache.set(key, cells)
   }
   return cells
+}
+
+/** CSS size of the editor image: `height` tall, width by the clip's aspect. */
+function editorSize(clip: VideoClip, height: number) {
+  return { width: Math.round((height * clip.large.w) / clip.large.h), height }
 }
 
 // ─── hooks ──────────────────────────────────────────────────────────────────
@@ -189,8 +210,15 @@ export const register: Register = (on, opts) => {
       description: 'animax: show/hide the pane; "/animax mute" or "/animax unmute" for sound',
     })
     if (await read($, isPaneOpen)) await openPane($) // reopen after a reload
+    else await openForEditor($)
     await syncTicker($) // keep animating if a reload landed mid-turn
     return next(e)
+  })
+
+  on('session.attach', async ($, e, next) => {
+    const result = await next(e)
+    if (EDITOR_SURFACES.includes(e.surface)) await openForEditor($)
+    return result
   })
 
   on('session.end', async ($, e, next) => {
@@ -213,8 +241,10 @@ export const register: Register = (on, opts) => {
     }
     if (await read($, isPaneOpen)) {
       await closePane($)
+      await update($, isPaneDismissed, () => true)
       return { text: 'animax pane closed.' }
     }
+    await update($, isPaneDismissed, () => false)
     await openPane($)
     return { text: 'animax pane opened. Run /animax again to hide it.' }
   })
@@ -222,6 +252,7 @@ export const register: Register = (on, opts) => {
   on('ui.close', async ($, e, next) => {
     const result = await next(e)
     if (e.id === PANE) {
+      if (e.origin.kind === 'person') await update($, isPaneDismissed, () => true)
       await update($, isPaneOpen, () => false)
       await syncTicker($)
     }
@@ -232,6 +263,7 @@ export const register: Register = (on, opts) => {
     generation += 1
     await update($, isWorking, () => true)
     await setStatus($, { state: 'thinking', detail: 'reading prompt' })
+    await openForEditor($)
     await syncTicker($)
     return next(e)
   })
@@ -272,6 +304,9 @@ export const register: Register = (on, opts) => {
   // The animation sits beside Claude Code's own spinner line, which is drawn
   // untouched by `next(e)`: word, ellipsis, timer and tokens all stay.
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
+    // Editors float a plugin's spinner tree as a card over the transcript, on
+    // top of the engine's own line: there the bot lives in its pane instead.
+    if (e.surface !== 'terminal') return next(e)
     const line = await next(e)
     const now = await read($, status)
     const state: AnimaxState = now.state === 'idle' ? 'thinking' : now.state
@@ -284,11 +319,8 @@ export const register: Register = (on, opts) => {
       const { Raster } = $.ui.resolve({ ...e, surface: 'terminal' as const })
       const n = await read($, frame)
       art = (
-        <Raster key="animax" columns={clip.small.size} rows={clip.small.size / 2} cells={cellsFor(state, clip, 'small', n)} />
+        <Raster key="animax" columns={clip.small.w} rows={clip.small.h / 2} cells={cellsFor(state, clip, 'small', n)} />
       )
-    } else if (clip && (e.surface === 'vscode' || e.surface === 'desktop')) {
-      const { Svg } = $.ui.resolve({ ...e, surface: e.surface })
-      art = <Svg source={clip.svg} alt={`animax: ${m.label}`} width={SPINNER_PX} height={SPINNER_PX} />
     } else {
       const n = await read($, frame)
       art = (
@@ -340,17 +372,17 @@ export const register: Register = (on, opts) => {
       const n = await read($, frame)
       return (
         <Box flexDirection="column">
-          <Raster key="animax-pane" columns={clip.large.size} rows={clip.large.size / 2} cells={cellsFor(now.state, clip, 'large', n)} />
+          <Raster key="animax-pane" columns={clip.large.w} rows={clip.large.h / 2} cells={cellsFor(now.state, clip, 'large', n)} />
           {caption}
         </Box>
       )
     }
     if (clip && e.surface !== 'mobile') {
       const { Svg } = $.ui.resolve({ ...e, surface: e.surface === 'desktop' ? 'desktop' : 'vscode' })
-      const px = e.props.placement === 'widget' ? SPINNER_PX : PANE_PX
+      const px = e.props.placement === 'widget' ? WIDGET_PX : PANE_PX
       return (
         <Box flexDirection="column">
-          <Svg source={clip.svg} alt={`animax: ${m.label}`} width={px} height={px} />
+          <Svg source={clip.svg} alt={`animax: ${m.label}`} {...editorSize(clip, px)} />
           {caption}
         </Box>
       )

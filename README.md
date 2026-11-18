@@ -6,18 +6,21 @@ soundtrack. animax works in the terminal CLI and in the VS Code chat panel.
 
 ## What you see
 
-- **Above the spinner line**: while Claude works, the bot for the current state
-  plays just above Claude Code's own `Flibbertigibbeting… (12s · 1.2k tokens)`
-  line. That line is left exactly as Claude Code draws it. In the terminal the
-  bot is drawn with truecolor half blocks. In VS Code it is an animated image.
-- **`/animax`**: shows or hides a pane with a larger bot.
+- **Terminal**: while Claude works, the bot for the current state plays just
+  above Claude Code's own `Flibbertigibbeting… (12s · 1.2k tokens)` line. That
+  line is left exactly as Claude Code draws it. The bot is drawn with truecolor
+  half blocks.
+- **VS Code chat**: the spinner line is left alone. The bot gets its own
+  animax panel, which opens by itself, so it never covers the chat.
+- **`/animax`**: shows or hides the panel, in the terminal or the editor. If you
+  close the panel, it stays closed for that session until you run `/animax`.
 - **Sound**: each state's soundtrack loops while that state lasts and stops when
   Claude finishes. `/animax mute` and `/animax unmute` turn it off and on.
 
 ## Settings (`/config`, or `pluginConfigs.animax.options` in settings.json)
 
 | Option     | Values            | Default |
-|------------|-------------------|---------|
+| ---------- | ----------------- | ------- |
 | `sound`    | `true` / `false`  | `true`  |
 | `position` | `above` / `below` | `above` |
 
@@ -36,12 +39,19 @@ Set `FFMPEG=C:\path\to\ffmpeg.exe` if ffmpeg is not on PATH. The script writes
 Until it runs, animax shows ASCII art instead.
 
 | State    | Video                        |
-|----------|------------------------------|
+| -------- | ---------------------------- |
 | idle     | `pixel-bot-idle.mp4`         |
 | thinking | `pixel-bot-thinking.mp4`     |
 | planning | `pixel-bot-planning.mp4`     |
 | coding   | `pixel-bot-cooking-code.mp4` |
 | testing  | `pixel-bot-testing-code.mp4` |
+
+## Install
+
+```
+/plugin marketplace add hanschh/animax
+/plugin install animax@hanschh
+```
 
 ## Load it
 
@@ -63,12 +73,24 @@ node scripts/animator.js config   # statusLine snippet for ~/.claude/settings.js
 
 ## Layout
 
-| Path                       | Role                                                       |
-|----------------------------|------------------------------------------------------------|
-| `hooks/register.tsx`       | in-app animation, audio, `/animax`                         |
+| Path                       | Role                                                         |
+| -------------------------- | ------------------------------------------------------------ |
+| `hooks/register.tsx`       | in-app animation, audio, `/animax`                           |
 | `hooks/hooks.json`         | loads the module, plus command hooks for the terminal extras |
-| `scripts/build-assets.mjs` | videos to frames, SVG sprites and WAV                      |
-| `scripts/pixels.mjs`       | frames to terminal cells (Raster and ANSI)                 |
-| `scripts/core.mjs`         | state detection and ASCII fallback                         |
-| `scripts/animator.js`      | terminal extras: `hook`, `statusline`, `watch`, `demo`     |
-| `tests/animax.test.tsx`    | `claude plugin test .`                                     |
+| `scripts/build-assets.mjs` | videos to frames, SVG sprites and WAV                        |
+| `scripts/pixels.mjs`       | frames to terminal cells (Raster and ANSI)                   |
+| `scripts/core.mjs`         | state detection and ASCII fallback                           |
+| `scripts/animator.js`      | terminal extras: `hook`, `statusline`, `watch`, `demo`       |
+| `tests/animax.test.tsx`    | `claude plugin test .`                                       |
+
+## Author
+
+Made by [hanschh](https://github.com/hanschh). The pixel-bot art and sounds are
+part of this project.
+
+Source: <https://github.com/hanschh/animax>
+
+## License
+
+[MIT](LICENSE) © 2026 hanschh. You may use, change and share animax. Every copy,
+or substantial part of it, must keep the copyright line and the license text.

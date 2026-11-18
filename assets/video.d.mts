@@ -5,9 +5,9 @@ export type VideoClip = {
   audio: string | null
   /** 0xRRGGBB colours; pixel index 0 is transparent, index n is palette[n - 1]. */
   palette: number[]
-  /** Base64 of size*size palette indices per frame, row-major. */
-  small: { size: number; frames: string[] }
-  large: { size: number; frames: string[] }
+  /** Per frame: base64 of RLE [count, index] pairs for w*h indices, row-major; h is even. */
+  small: { w: number; h: number; frames: string[] }
+  large: { w: number; h: number; frames: string[] }
   /** Self-animating SVG (sprite strip + CSS steps) for the editor surfaces. */
   svg: string
 }

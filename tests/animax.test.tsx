@@ -34,16 +34,24 @@ function engine(on: TestOn) {
   })
 }
 
-const SURFACES = ['terminal', 'vscode'] as const
-
-test('the engine spinner line is kept whole, with the animation and label beside it', async ($, on) => {
+test('in the terminal the spinner line is kept whole, with the bot and label beside it', async ($, on) => {
   engine(on)
   await $.tool.call({ tool: 'Edit', file_path: '/x/app.js', old_string: 'a', new_string: 'b' })
 
-  for (const surface of SURFACES) {
+  const ui = await $.ui.mount({ ...SPINNER, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /Flibbertigibbeting/ }))?.text).toBe('Flibbertigibbeting…')
+  expect(await ui.find({ type: 'Text', text: 'cooking code' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('in the editor the spinner line is left alone', async ($, on) => {
+  engine(on)
+  await $.tool.call({ tool: 'Edit', file_path: '/x/app.js', old_string: 'a', new_string: 'b' })
+
+  for (const surface of ['vscode', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...SPINNER, surface })
-    expect((await ui.find({ type: 'Text', text: /Flibbertigibbeting/ }))?.text).toBe('Flibbertigibbeting…')
-    expect(await ui.find({ type: 'Text', text: 'cooking code' })).toBeDefined()
+    const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+    expect(texts).toEqual(['Flibbertigibbeting…'])
     await ui.unmount()
   }
 })
@@ -57,13 +65,13 @@ test('each tool maps to its state', async ($, on) => {
   ] as const
   for (const [call, label] of cases) {
     await $.tool.call(call as never)
-    const ui = await $.ui.mount({ ...SPINNER, surface: 'vscode' })
+    const ui = await $.ui.mount({ ...SPINNER, surface: 'terminal' })
     expect(await ui.find({ type: 'Text', text: label })).toBeDefined()
     await ui.unmount()
   }
 })
 
-test('the video is a Raster in the terminal and an Svg in the editor', async ($, on) => {
+test('the video is a Raster by the terminal spinner and an Svg in the editor pane', async ($, on) => {
   if (!VIDEO) return // assets not built: the ASCII fallback is covered above
   engine(on)
   await $.tool.call({ tool: 'Write', file_path: '/x/hello.js', content: '' })
@@ -72,7 +80,7 @@ test('the video is a Raster in the terminal and an Svg in the editor', async ($,
   expect(await term.find({ type: 'Raster' })).toBeDefined()
   await term.unmount()
 
-  const editor = await $.ui.mount({ ...SPINNER, surface: 'vscode' })
+  const editor = await $.ui.mount({ ...PANE, surface: 'vscode' })
   expect(await editor.find({ type: 'Svg' })).toBeDefined()
   await editor.unmount()
 })

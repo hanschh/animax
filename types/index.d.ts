@@ -11,6 +11,8 @@ declare module 'claude-code' {
       frame: number
       /** Whether the /animax pane is open. */
       isPaneOpen: boolean
+      /** The person closed the pane: do not open it again by itself this session. */
+      isPaneDismissed: boolean
       /** Whether a turn is running; kept here so a hot reload does not lose it. */
       isWorking: boolean
     }
