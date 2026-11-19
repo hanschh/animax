@@ -23,10 +23,23 @@ soundtrack. animax works in the terminal CLI and in the VS Code chat panel.
 
 ## Settings (`/config`, or `pluginConfigs.animax.options` in settings.json)
 
-| Option     | Values            | Default |
-| ---------- | ----------------- | ------- |
-| `sound`    | `true` / `false`  | `true`  |
-| `position` | `above` / `below` | `above` |
+| Option     | Values            | Default | Applies to            |
+| ---------- | ----------------- | ------- | --------------------- |
+| `sound`    | `true` / `false`  | `true`  | terminal and VS Code  |
+| `position` | `above` / `below` | `above` | terminal only         |
+
+- **`sound`**: plays each state's soundtrack, in the terminal and in VS Code
+  chat. `/animax mute` and `/animax unmute` change it from either one, and the
+  choice is saved for both.
+- **`position`**: puts the bot above or below the `Thinking…` line. Only the
+  terminal shows that line. In VS Code chat the bot is always in its own
+  animax panel, so this option changes nothing there.
+
+To turn sound off in `~/.claude/settings.json`:
+
+```json
+{ "pluginConfigs": { "animax": { "options": { "sound": false } } } }
+```
 
 ## Build the video assets (once, and again after changing a video)
 
@@ -36,7 +49,11 @@ them needs ffmpeg:
 ```
 node scripts/build-assets.mjs            # reads ../video/pixel-bot-*.mp4
 node scripts/build-assets.mjs --keep-bg  # keep the video background
+node scripts/build-assets.mjs ../video/8sec-build --seconds=8  # other folder, longer clips
 ```
+
+`--seconds=N` sets how much of each video is used (default 4, at 8 fps). The
+files in the folder must be named as in the table below.
 
 Set `FFMPEG=C:\path\to\ffmpeg.exe` if ffmpeg is not on PATH. The script writes
 `assets/video.mjs` and `assets/audio/*.wav`, plus previews in `build/preview/`.
@@ -52,13 +69,36 @@ Until it runs, animax shows ASCII art instead.
 
 ## Install
 
+Run these in a normal shell (PowerShell, cmd, bash, zsh). They work for both
+the terminal CLI and the VS Code chat panel:
+
+```
+claude plugin marketplace add hanschh/animax
+claude plugin install animax@hanschh
+```
+
+Or, inside an interactive `claude` session in the terminal:
+
 ```
 /plugin marketplace add hanschh/animax
 /plugin install animax@hanschh
 ```
 
-That is all you need: Claude Code downloads the plugin itself, so there is no
-path to set. Start a new chat afterwards.
+> `/plugin` only works inside an interactive `claude` session in the terminal.
+> The VS Code chat panel replies "/plugin isn't available in this environment",
+> and typing `/plugin` straight into PowerShell fails because it is not a shell
+> command. Use the `claude plugin …` form above in those cases.
+
+Claude Code downloads the plugin itself, so there is no path to set. Start a
+new chat (or reload the VS Code window) afterwards.
+
+### Update or remove
+
+```
+claude plugin marketplace update hanschh
+claude plugin update animax@hanschh
+claude plugin uninstall animax@hanschh
+```
 
 ## Development (load from a local clone)
 

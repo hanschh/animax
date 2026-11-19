@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // animax asset builder: turns the pixel-bot videos into what the plugin draws.
 //
-//   node scripts/build-assets.mjs [videoDir] [--keep-bg] [--synthetic]
+//   node scripts/build-assets.mjs [videoDir] [--seconds=N] [--keep-bg] [--synthetic]
 //
 // videoDir    defaults to ../video next to the plugin folder
+// --seconds=N how many seconds of each video to use (default 4)
 // --keep-bg   keep the video's background instead of making it transparent
 // --synthetic write generated test frames (no ffmpeg, no audio), for tests
 //
@@ -29,8 +30,9 @@ const VIDEO_DIR = path.resolve(args.find(a => !a.startsWith('--')) ?? path.join(
 const FFMPEG = process.env.FFMPEG || 'ffmpeg'
 
 const FPS = 8
-const SECONDS = 4
-const FRAMES = FPS * SECONDS
+const SECONDS = Number(args.find(a => a.startsWith('--seconds='))?.split('=')[1] ?? 4)
+if (!(SECONDS > 0)) throw new Error('--seconds must be a positive number')
+const FRAMES = Math.round(FPS * SECONDS)
 const SIZES = { small: 24, large: 48 } // pixels; the terminal shows 2 pixels per row
 const WORK = 270 // decode size; the bot is found and cropped at this resolution
 const PAD = 0.04 // margin kept around the bot, as a share of the crop

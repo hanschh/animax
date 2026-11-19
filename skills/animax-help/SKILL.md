@@ -1,9 +1,20 @@
 ---
-name: animax
-description: Set up, preview, or troubleshoot the animax ASCII animations (thinking / planning / coding / testing) in Claude Code's terminal and VS Code chat. Use when the user asks to show or hide the animax pane, enable the animax status line or watch pane, run the demo, or asks why the animation is not showing.
+name: animax-help
+description: Set up, preview, or troubleshoot the animax pixel-bot animation (thinking / planning / coding / testing) in Claude Code's terminal and VS Code chat. Use when the user asks how to show or hide the animax pane or mute its sound, enable the animax status line or watch pane, run the demo, or asks why the animation is not showing.
 ---
 
 # animax
+
+The pane and the sound are controlled by the `/animax` command, not by this
+skill. You cannot run that command for the user. Tell them to type it:
+
+- `/animax`: show or hide the animax pane
+- `/animax mute` / `/animax unmute`: sound off or on (saved for terminal and VS Code)
+- `/animax sound`: show whether sound is on
+
+If they would rather have it in settings, `sound` can also be set to `false` under
+`pluginConfigs.animax.options` in `~/.claude/settings.json`. Ask before you edit
+that file.
 
 animax shows an ASCII character that reacts to what Claude Code is doing:
 
