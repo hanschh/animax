@@ -12,7 +12,7 @@
       "name": "animax",
       "source": "./",
       "description": "Pixel-bot animation and sound for Claude Code: thinking, planning, coding and testing, in the terminal and the VS Code chat.",
-      "version": "1.4.0",
+      "version": "1.4.1",
       "author": {
         "name": "hanschh"
       },

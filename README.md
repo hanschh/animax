@@ -20,6 +20,8 @@ soundtrack. animax works in the terminal CLI and in the VS Code chat panel.
   close the panel, it stays closed for that session until you run `/animax`.
 - **Sound**: each state's soundtrack loops while that state lasts and stops when
   Claude finishes. `/animax mute` and `/animax unmute` turn it off and on.
+  Closing the animax panel (its X, or `/animax`) also silences it until you
+  open the panel again.
 
 ## Settings (`/config`, or `pluginConfigs.animax.options` in settings.json)
 

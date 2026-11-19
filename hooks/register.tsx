@@ -41,6 +41,7 @@ let generation = 0 // the newest status change; older timers stand down
 let platform: string | null = null
 let audioState: AnimaxState | null = null
 let stopAudio: (() => void) | null = null
+let paneHidden = false // the person closed the pane: no sound until it opens again
 const cellCache = new Map<string, string>()
 
 // ─── state ──────────────────────────────────────────────────────────────────
@@ -87,6 +88,13 @@ async function closePane($: EngineInterface) {
   await syncTicker($)
 }
 
+/** The person closed the pane: keep it closed and stop the sound with it. */
+async function hidePane($: EngineInterface) {
+  await update($, isPaneDismissed, () => true)
+  paneHidden = true
+  haltAudio()
+}
+
 const EDITOR_SURFACES: readonly string[] = ['vscode', 'desktop']
 
 /** In the editor the bot lives in a pane: open it unless the person closed it. */
@@ -122,7 +130,7 @@ function haltAudio() {
 
 /** Switch the soundtrack once a state has held for a moment. */
 function scheduleAudio($: EngineInterface, state: AnimaxState) {
-  const wanted: AnimaxState | null = options.sound && state !== 'idle' ? state : null
+  const wanted: AnimaxState | null = options.sound && !paneHidden && state !== 'idle' ? state : null
   if (wanted === null) {
     haltAudio()
     return
@@ -136,7 +144,7 @@ function scheduleAudio($: EngineInterface, state: AnimaxState) {
 
 async function playAudio($: EngineInterface, state: AnimaxState) {
   const clip = VIDEO?.states[state]?.audio
-  if (!clip || !options.sound || state === audioState) return
+  if (!clip || !options.sound || paneHidden || state === audioState) return
   haltAudio()
   audioState = state
   try {
@@ -209,6 +217,7 @@ export const register: Register = (on, opts) => {
       name: 'animax',
       description: 'animax: show/hide the pane; "/animax mute" or "/animax unmute" for sound',
     })
+    paneHidden = await read($, isPaneDismissed) // module variables start over on a reload
     if (await read($, isPaneOpen)) await openPane($) // reopen after a reload
     else await openForEditor($)
     await syncTicker($) // keep animating if a reload landed mid-turn
@@ -227,32 +236,43 @@ export const register: Register = (on, opts) => {
   })
 
   on('command.run', { command: 'animax' }, async ($, e) => {
-    const arg = e.args.trim().toLowerCase()
+    const arg = (e.args ?? '').trim().toLowerCase()
     if (arg === 'mute' || arg === 'unmute') {
       const sound = arg === 'unmute'
-      const { deny } = await $.config.set({ key: 'animax.sound', value: sound })
-      if (deny) return { text: `animax: could not change the sound setting (${deny}).` }
-      options = { ...options, sound } // the reload that follows reads it too
+      // Apply it now, whatever happens to the saved setting.
+      options = { ...options, sound }
       if (!sound) haltAudio()
-      return { text: sound ? 'animax sound on.' : 'animax muted.' }
+      const text = sound ? 'animax sound on.' : 'animax muted.'
+      let problem: string | undefined
+      try {
+        problem = (await $.config.set({ key: 'animax.sound', value: sound })).deny
+      } catch (err) {
+        problem = err instanceof Error ? err.message : String(err)
+      }
+      return { text: problem ? `${text} (Only for this session: could not save the setting: ${problem})` : text }
     }
     if (arg === 'sound') {
       return { text: `animax sound is ${options.sound ? 'on' : 'off'}. Use /animax mute or /animax unmute.` }
     }
-    if (await read($, isPaneOpen)) {
-      await closePane($)
-      await update($, isPaneDismissed, () => true)
-      return { text: 'animax pane closed.' }
+    try {
+      if (await read($, isPaneOpen)) {
+        await closePane($)
+        await hidePane($)
+        return { text: 'animax pane closed.' }
+      }
+      await update($, isPaneDismissed, () => false)
+      paneHidden = false // sound comes back with the next state change
+      await openPane($)
+      return { text: 'animax pane opened. Run /animax again to hide it.' }
+    } catch (err) {
+      return { text: `animax: could not toggle the pane (${err instanceof Error ? err.message : String(err)}).` }
     }
-    await update($, isPaneDismissed, () => false)
-    await openPane($)
-    return { text: 'animax pane opened. Run /animax again to hide it.' }
   })
 
   on('ui.close', async ($, e, next) => {
     const result = await next(e)
     if (e.id === PANE) {
-      if (e.origin.kind === 'person') await update($, isPaneDismissed, () => true)
+      if (e.origin.kind === 'person') await hidePane($)
       await update($, isPaneOpen, () => false)
       await syncTicker($)
     }

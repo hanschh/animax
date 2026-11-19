@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 import { VIDEO } from '../assets/video.mjs'
 
@@ -117,4 +117,65 @@ test('an idle pane says it is waiting', async ($, on) => {
     expect(await ui.find({ type: 'Text', text: 'waiting for your prompt' })).toBeDefined()
     await ui.unmount()
   }
+})
+
+test('/animax mute, unmute and sound answer with text', async ($, on) => {
+  const saved: unknown[] = []
+  on('config.set', (_$, e) => {
+    saved.push(e.value)
+    return { value: e.value }
+  })
+  expect((await $.command.run({ command: 'animax', args: 'mute' } as never)).text).toBe('animax muted.')
+  expect((await $.command.run({ command: 'animax', args: 'sound' } as never)).text).toContain('off')
+  expect((await $.command.run({ command: 'animax', args: 'unmute' } as never)).text).toBe('animax sound on.')
+  expect(saved).toEqual([false, true])
+})
+
+test('/animax mute still mutes when the setting cannot be saved', async $ => {
+  const muted = await $.command.run({ command: 'animax', args: 'mute' } as never)
+  expect(muted.text).toContain('animax muted.')
+  expect(muted.text).toContain('Only for this session')
+  expect((await $.command.run({ command: 'animax', args: 'sound' } as never)).text).toContain('off')
+})
+
+test('/animax toggles the pane', async ($, on) => {
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.close', () => ({ value: undefined }))
+  expect((await $.command.run({ command: 'animax', args: '' } as never)).text).toContain('opened')
+  expect((await $.command.run({ command: 'animax', args: '' } as never)).text).toContain('closed')
+})
+
+function audioWorld(on: TestOn) {
+  engine(on)
+  const clock = mock.clock(on)
+  const plays: string[] = []
+  on('session.info', () => ({ value: { platform: 'macos' } as never }))
+  on('audio.play', (_$, e) => {
+    plays.push(String((e as { clip?: unknown }).clip ?? 'clip'))
+    return { value: undefined }
+  })
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.close', () => ({ value: undefined }))
+  return { clock, plays }
+}
+
+test('sound plays while Claude works', async ($, on) => {
+  const { clock, plays } = audioWorld(on)
+  await $.tool.call({ tool: 'Edit', file_path: '/x/app.js', old_string: 'a', new_string: 'b' })
+  await clock.advance(1000)
+  expect(plays.length).toBeGreaterThan(0)
+})
+
+test('closing the pane stops the sound until it is opened again', async ($, on) => {
+  const { clock, plays } = audioWorld(on)
+  await $.command.run({ command: 'animax', args: '' } as never) // open
+  await $.command.run({ command: 'animax', args: '' } as never) // close
+  await $.tool.call({ tool: 'Edit', file_path: '/x/app.js', old_string: 'a', new_string: 'b' })
+  await clock.advance(1000)
+  expect(plays).toEqual([])
+
+  await $.command.run({ command: 'animax', args: '' } as never) // open again
+  await $.tool.call({ tool: 'Bash', command: 'npm test' })
+  await clock.advance(1000)
+  expect(plays.length).toBeGreaterThan(0)
 })
