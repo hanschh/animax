@@ -42,6 +42,7 @@ let platform: string | null = null
 let audioState: AnimaxState | null = null
 let stopAudio: (() => void) | null = null
 let paneHidden = false // the person closed the pane: no sound until it opens again
+const SOUND_KEY = 'sound' // $.store: the last /animax mute (false) or unmute (true)
 const cellCache = new Map<string, string>()
 
 // ─── state ──────────────────────────────────────────────────────────────────
@@ -218,6 +219,13 @@ export const register: Register = (on, opts) => {
       description: 'animax: show/hide the pane; "/animax mute" or "/animax unmute" for sound',
     })
     paneHidden = await read($, isPaneDismissed) // module variables start over on a reload
+    // /animax mute or unmute, saved in an earlier session, wins over the setting.
+    try {
+      const saved = await $.store.get(SOUND_KEY)
+      if (typeof saved === 'boolean') options = { ...options, sound: saved }
+    } catch {
+      // keep the setting's value
+    }
     if (await read($, isPaneOpen)) await openPane($) // reopen after a reload
     else await openForEditor($)
     await syncTicker($) // keep animating if a reload landed mid-turn
@@ -239,27 +247,25 @@ export const register: Register = (on, opts) => {
     const arg = (e.args ?? '').trim().toLowerCase()
     if (arg === 'mute' || arg === 'unmute') {
       const sound = arg === 'unmute'
-      // Apply it now, whatever happens to the saved setting.
+      // Apply it now, whatever happens to the saved choice.
       options = { ...options, sound }
       if (!sound) haltAudio()
       const text = sound ? 'animax sound on.' : 'animax muted.'
+      // The plugin's own store keeps the choice on every surface. Not every
+      // surface lists the plugin's /config rows, so that row is only a bonus.
       let problem: string | undefined
       try {
-        // The row's key is `<plugin>.sound`, and the plugin's name can carry its
-        // marketplace (`animax@hanschh`), so look it up rather than guess.
-        const rows = await $.config.list()
-        const row =
-          rows.find(r => r.key === 'animax.sound') ??
-          rows.find(r => /^animax(@[^.]+)?\.sound$/.test(r.key))
-        if (row) problem = (await $.config.set({ key: row.key, value: sound })).deny
-        else {
-          const ours = rows.filter(r => r.key.startsWith('animax')).map(r => r.key)
-          problem = `no animax sound row in /config${ours.length ? ` (found ${ours.join(', ')})` : ''}`
-        }
+        await $.store.set(SOUND_KEY, sound)
       } catch (err) {
         problem = err instanceof Error ? err.message : String(err)
       }
-      return { text: problem ? `${text} (Only for this session: could not save the setting: ${problem})` : text }
+      try {
+        const row = (await $.config.list()).find(r => /^animax(@[^.]+)?\.sound$/.test(r.key))
+        if (row) await $.config.set({ key: row.key, value: sound })
+      } catch {
+        // the store already holds it
+      }
+      return { text: problem ? `${text} (Only for this session: could not save it: ${problem})` : text }
     }
     if (arg === 'sound') {
       return { text: `animax sound is ${options.sound ? 'on' : 'off'}. Use /animax mute or /animax unmute.` }

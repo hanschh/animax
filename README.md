@@ -31,8 +31,9 @@ soundtrack. animax works in the terminal CLI and in the VS Code chat panel.
 | `position` | `above` / `below` | `above` | terminal only         |
 
 - **`sound`**: plays each state's soundtrack, in the terminal and in VS Code
-  chat. `/animax mute` and `/animax unmute` change it from either one, and the
-  choice is saved for both.
+  chat. `/animax mute` and `/animax unmute` change it from either one. animax
+  saves that choice itself, for both, and it wins over this setting until you
+  run the other one.
 - **`position`**: puts the bot above or below the `Thinking…` line. Only the
   terminal shows that line. In VS Code chat the bot is always in its own
   animax panel, so this option changes nothing there.

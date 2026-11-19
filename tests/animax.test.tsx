@@ -119,7 +119,16 @@ test('an idle pane says it is waiting', async ($, on) => {
   }
 })
 
-test('/animax mute, unmute and sound answer with text', async ($, on) => {
+test('/animax mute and unmute save without a /config row', async ($, on) => {
+  mock.store(on)
+  expect((await $.command.run({ command: 'animax', args: 'mute' } as never)).text).toBe('animax muted.')
+  expect((await $.command.run({ command: 'animax', args: 'sound' } as never)).text).toContain('off')
+  expect((await $.command.run({ command: 'animax', args: 'unmute' } as never)).text).toBe('animax sound on.')
+  expect((await $.command.run({ command: 'animax', args: 'sound' } as never)).text).toContain('on')
+})
+
+test('/animax mute also sets the /config row where a surface lists it', async ($, on) => {
+  mock.store(on)
   const saved: unknown[] = []
   // A plugin installed from a marketplace names its rows <name>@<marketplace>.<field>.
   on('config.list', () => ({ value: [{ key: 'animax@hanschh.sound', label: 'animax sound', kind: 'boolean', value: true, isLocked: false }] as never }))
@@ -127,16 +136,22 @@ test('/animax mute, unmute and sound answer with text', async ($, on) => {
     saved.push(`${e.key}=${String(e.value)}`)
     return { value: e.value }
   })
-  expect((await $.command.run({ command: 'animax', args: 'mute' } as never)).text).toBe('animax muted.')
-  expect((await $.command.run({ command: 'animax', args: 'sound' } as never)).text).toContain('off')
-  expect((await $.command.run({ command: 'animax', args: 'unmute' } as never)).text).toBe('animax sound on.')
-  expect(saved).toEqual(['animax@hanschh.sound=false', 'animax@hanschh.sound=true'])
+  await $.command.run({ command: 'animax', args: 'mute' } as never)
+  expect(saved).toEqual(['animax@hanschh.sound=false'])
 })
 
-test('/animax mute still mutes when the setting cannot be saved', async $ => {
+test('/animax mute still mutes when nothing can be saved', async $ => {
   const muted = await $.command.run({ command: 'animax', args: 'mute' } as never)
   expect(muted.text).toContain('animax muted.')
   expect(muted.text).toContain('Only for this session')
+  expect((await $.command.run({ command: 'animax', args: 'sound' } as never)).text).toContain('off')
+})
+
+test('a saved mute holds in the next session', async ($, on) => {
+  mock.store(on, { sound: false })
+  on('command.register', () => ({ value: undefined as never }))
+  on('session.start', (_$, e) => e as never)
+  await $.session.start({ source: 'startup', cwd: '/x', surface: null, isInteractive: true } as never)
   expect((await $.command.run({ command: 'animax', args: 'sound' } as never)).text).toContain('off')
 })
 
