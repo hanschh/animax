@@ -10,7 +10,11 @@ export const ACTIVE_HOLD_MS = 3000
 
 const PLAN_TOOLS = new Set(['TodoWrite', 'EnterPlanMode', 'ExitPlanMode', 'TaskCreate', 'TaskUpdate'])
 const CODE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
-const SHELL_TOOLS = new Set(['Bash', 'PowerShell'])
+// Codex names shell calls "Bash" too; the others are older or local names.
+const SHELL_TOOLS = new Set(['Bash', 'PowerShell', 'shell', 'local_shell', 'exec_command'])
+// Codex edits files with one patch tool; the file is named inside the patch.
+const PATCH_TOOLS = new Set(['apply_patch'])
+const PATCH_FILE_RE = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/m
 const TEST_RE = /\b(test|tests|spec|jest|vitest|mocha|ava|pytest|unittest|phpunit|rspec|go\s+test|cargo\s+(test|check|clippy)|lint|eslint|tsc|mypy|ruff|flake8|pyright|debug|gdb|lldb)\b/i
 const BUILD_RE = /\b(build|compile|make|cmake|install|npm\s+run|pnpm|yarn|cargo\s+build|go\s+build|gradle|mvn|dotnet\s+build|webpack|vite|esbuild)\b/i
 
@@ -32,8 +36,14 @@ export function classifyTool(tool, input = {}) {
   if (CODE_TOOLS.has(tool)) {
     return { state: 'coding', detail: `${tool} ${baseName(input.file_path || input.notebook_path)}`.trim() }
   }
+  if (PATCH_TOOLS.has(tool)) {
+    const patch = typeof input === 'string' ? input : String(input.command || input.patch || input.input || '')
+    const file = patch.match(PATCH_FILE_RE)?.[1]
+    return { state: 'coding', detail: `apply_patch ${baseName(file)}`.trim() }
+  }
   if (SHELL_TOOLS.has(tool)) {
-    const cmd = String(input.command || '')
+    const raw = input.command
+    const cmd = Array.isArray(raw) ? raw.join(' ') : String(raw || '')
     const label = cmd.trim().split(/\s+/).slice(0, 3).join(' ').slice(0, 40)
     if (TEST_RE.test(cmd)) return { state: 'testing', detail: label }
     if (BUILD_RE.test(cmd)) return { state: 'coding', detail: label }

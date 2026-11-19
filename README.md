@@ -126,6 +126,44 @@ automatically, turn it on once, in either of these ways:
 Claude Code then checks for updates in the background after a session starts.
 A new version loads in your next session.
 
+## Codex (CLI and VS Code extension)
+
+animax also follows OpenAI Codex, through Codex hooks. Codex has no way for a
+plugin to draw inside its chat, so the bot plays in a terminal of its own and
+the sound comes from the hooks.
+
+1. Get animax and install the hooks (needs Node.js):
+
+   ```
+   git clone https://github.com/hanschh/animax
+   node animax/scripts/animator.js codex-install
+   ```
+
+   This copies animax to `~/.animax/codex` and adds its hooks to
+   `~/.codex/hooks.json`, next to any hooks you already have.
+
+2. Trust the hooks once. Codex skips new hooks until you trust them: run
+   `codex` in a terminal, type `/hooks` and trust the animax entries. The VS
+   Code extension reads the same `~/.codex` folder.
+
+   No `codex` command? The VS Code extension ships one at
+   `~/.vscode/extensions/openai.chatgpt-<version>/bin/<platform>/codex`.
+
+3. Watch the bot in a split terminal, in VS Code or anywhere else:
+
+   ```
+   node $HOME/.animax/codex/scripts/animator.js watch
+   ```
+
+| Do this                           | Command                                                   |
+| --------------------------------- | --------------------------------------------------------- |
+| Sound off / on                    | `node $HOME/.animax/codex/scripts/animator.js mute` / `unmute` |
+| Update after a new animax version | `git pull`, then `codex-install` again (then trust again)  |
+| Remove                            | `node animax/scripts/animator.js codex-uninstall`          |
+
+Codex asks you to trust hooks again whenever they change. `ANIMAX_DEBUG=1`
+logs each hook's input to `<tmp>/animax/hook.log`.
+
 ## Development (load from a local clone)
 
 Only for working on animax itself. Replace the path with wherever you cloned
@@ -158,7 +196,7 @@ node scripts/animator.js config   # statusLine snippet for ~/.claude/settings.js
 | `scripts/build-assets.mjs` | videos to frames, SVG sprites and WAV                        |
 | `scripts/pixels.mjs`       | frames to terminal cells (Raster and ANSI)                   |
 | `scripts/core.mjs`         | state detection and ASCII fallback                           |
-| `scripts/animator.js`      | terminal extras: `hook`, `statusline`, `watch`, `demo`       |
+| `scripts/animator.js`      | terminal extras: `hook`, `statusline`, `watch`, `demo`; Codex: `codex-install`, `mute` |
 | `tests/animax.test.tsx`    | `claude plugin test .`                                       |
 
 ## Author

@@ -25,10 +25,17 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { spawn } = require('child_process');
 const { pathToFileURL } = require('url');
 
 const STATE_DIR = path.join(os.tmpdir(), 'animax');
 const CURRENT_FILE = path.join(STATE_DIR, 'current.json');
+const PLAYER_FILE = path.join(STATE_DIR, 'player.json'); // the looping soundtrack: { pid, state }
+const HOME_DIR = path.join(os.homedir(), '.animax');
+const CONFIG_FILE = path.join(HOME_DIR, 'config.json'); // { sound: false } after `mute`
+const CODEX_COPY = path.join(HOME_DIR, 'codex'); // the copy Codex hooks run
+const CODEX_HOOKS = path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'hooks.json');
+const ROOT = path.join(__dirname, '..');
 const STALE_MS = 10 * 60 * 1000; // a non-idle state this old means a crashed session
 
 let core; // scripts/core.mjs, loaded in main()
@@ -116,6 +123,10 @@ function runHook() {
     if (process.stdin.isTTY) return; // run by hand without input: do nothing
     const raw = fs.readFileSync(0, 'utf8');
     const evt = raw.trim() ? JSON.parse(raw) : {};
+    if (process.env.ANIMAX_DEBUG) {
+      fs.mkdirSync(STATE_DIR, { recursive: true });
+      fs.appendFileSync(path.join(STATE_DIR, 'hook.log'), `${raw.trim()}\n`);
+    }
     const next = classify(evt);
     if (!next) return;
     const prev = readJson(sessionFile(evt.session_id) || CURRENT_FILE);
@@ -124,9 +135,149 @@ function runHook() {
       const f = sessionFile(evt.session_id);
       if (f) try { fs.unlinkSync(f); } catch { /* ignore */ }
     }
+    // Codex has no in-app player, so its hooks play the sound themselves.
+    if (process.argv.includes('--sound')) followSound(evt, next);
   } catch {
     // A decorative plugin must never break Claude Code.
   }
+}
+
+// ─── sound (Codex hooks) ────────────────────────────────────────────────────
+
+function isSoundOn() {
+  const c = readJson(CONFIG_FILE);
+  return !(c && c.sound === false);
+}
+
+function isAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function stopPlayer() {
+  const p = readJson(PLAYER_FILE);
+  if (p && p.pid) {
+    try {
+      // A process group on macOS and Linux takes the player's child with it.
+      process.kill(process.platform === 'win32' ? p.pid : -p.pid);
+    } catch { /* already gone */ }
+  }
+  try { fs.unlinkSync(PLAYER_FILE); } catch { /* ignore */ }
+}
+
+function startPlayer(state) {
+  const wav = path.join(ROOT, 'assets', 'audio', `${state}.wav`);
+  if (!fs.existsSync(wav)) return stopPlayer();
+  const p = readJson(PLAYER_FILE);
+  if (p && p.state === state && isAlive(p.pid)) return; // already looping this one
+  stopPlayer();
+  const opts = { detached: true, stdio: 'ignore', windowsHide: true };
+  let child;
+  if (process.platform === 'win32') {
+    const file = wav.replace(/'/g, "''");
+    const script = `$p = New-Object System.Media.SoundPlayer '${file}'; $p.PlayLooping(); Start-Sleep -Seconds 1800`;
+    child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], opts);
+  } else {
+    const play = process.platform === 'darwin' ? 'afplay "$0"' : '(aplay -q "$0" || paplay "$0")';
+    // Stop after 30 minutes, as the Windows player does, if no hook ends it.
+    child = spawn('sh', ['-c', `end=$(( $(date +%s) + 1800 )); while [ $(date +%s) -lt $end ]; do ${play} || exit; done`, wav], opts);
+  }
+  child.on('error', () => { /* no player on this system */ });
+  child.unref();
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  writeJsonAtomic(PLAYER_FILE, { pid: child.pid, state });
+}
+
+/** Loop the soundtrack of the state a hook event starts; stop it when the turn ends. */
+function followSound(evt, next) {
+  const name = evt.hook_event_name;
+  if (name === 'Stop' || name === 'SessionEnd' || name === 'SessionStart' || !isSoundOn()) return stopPlayer();
+  // After a tool the bot is "analyzing": keep the clip that is playing.
+  if (name === 'UserPromptSubmit' || name === 'PreToolUse') startPlayer(next.state);
+}
+
+function runMute(sound) {
+  fs.mkdirSync(HOME_DIR, { recursive: true });
+  const c = readJson(CONFIG_FILE) || {};
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify({ ...c, sound }, null, 2));
+  if (!sound) stopPlayer();
+  console.log(sound ? 'animax sound on.' : 'animax muted.');
+}
+
+// ─── Codex install ──────────────────────────────────────────────────────────
+
+const CODEX_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'SubagentStop', 'Stop', 'SessionEnd'];
+const isAnimaxHook = h => /animax/i.test(String((h && h.command) || ''));
+
+function readCodexHooks() {
+  const data = readJson(CODEX_HOOKS);
+  if (fs.existsSync(CODEX_HOOKS) && !data) {
+    throw new Error(`${CODEX_HOOKS} is not valid JSON; fix or move it first.`);
+  }
+  return data && typeof data === 'object' ? data : {};
+}
+
+/** Drop animax's own entries from every event, keeping everything else. */
+function withoutAnimax(data) {
+  const hooks = { ...(data.hooks || {}) };
+  for (const [event, groups] of Object.entries(hooks)) {
+    if (!Array.isArray(groups)) continue;
+    const kept = groups
+      .map(g => ({ ...g, hooks: (g.hooks || []).filter(h => !isAnimaxHook(h)) }))
+      .filter(g => g.hooks.length > 0);
+    if (kept.length) hooks[event] = kept;
+    else delete hooks[event];
+  }
+  return { ...data, hooks };
+}
+
+function copyTree(from, to, keep) {
+  fs.mkdirSync(to, { recursive: true });
+  for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+    const src = path.join(from, entry.name);
+    if (entry.isDirectory()) copyTree(src, path.join(to, entry.name), keep);
+    else if (keep(entry.name)) fs.copyFileSync(src, path.join(to, entry.name));
+  }
+}
+
+function runCodexInstall() {
+  const data = withoutAnimax(readCodexHooks());
+  // Hooks run a copy, so updating or moving this folder never breaks them.
+  fs.rmSync(CODEX_COPY, { recursive: true, force: true });
+  copyTree(path.join(ROOT, 'scripts'), path.join(CODEX_COPY, 'scripts'), n => /\.(js|mjs)$/.test(n) && n !== 'build-assets.mjs');
+  copyTree(path.join(ROOT, 'assets'), path.join(CODEX_COPY, 'assets'), n => /\.(mjs|wav)$/.test(n));
+
+  const script = path.join(CODEX_COPY, 'scripts', 'animator.js').replace(/\\/g, '/');
+  const command = `node "${script}" hook --sound`;
+  for (const event of CODEX_EVENTS) {
+    const handler = { type: 'command', command, timeout: event === 'SessionEnd' ? 2 : 5 };
+    data.hooks[event] = [...(data.hooks[event] || []), { hooks: [handler] }];
+  }
+  fs.mkdirSync(path.dirname(CODEX_HOOKS), { recursive: true });
+  fs.writeFileSync(CODEX_HOOKS, `${JSON.stringify(data, null, 2)}\n`);
+
+  console.log(`animax hooks added to ${CODEX_HOOKS}
+animax copied to ${CODEX_COPY}
+
+Next:
+  1. Codex runs new hooks only after you trust them. Open a terminal and run
+     codex, type /hooks, and trust the animax hooks.
+  2. Watch the bot in a split terminal:  node "${script}" watch
+  3. Sound: node "${script}" mute   (or unmute)
+
+Run this again after updating animax; remove with codex-uninstall.`);
+}
+
+function runCodexUninstall() {
+  const data = withoutAnimax(readCodexHooks());
+  if (fs.existsSync(CODEX_HOOKS)) fs.writeFileSync(CODEX_HOOKS, `${JSON.stringify(data, null, 2)}\n`);
+  stopPlayer();
+  fs.rmSync(CODEX_COPY, { recursive: true, force: true });
+  console.log(`animax hooks removed from ${CODEX_HOOKS}, and ${CODEX_COPY} deleted.`);
 }
 
 // ─── ANSI helpers ───────────────────────────────────────────────────────────
@@ -253,6 +404,9 @@ Usage: node animator.js <command>
   demo          cycle through all states
   set <state>   force a state: ${core.STATES.join(', ')}
   config        print the statusLine snippet for ~/.claude/settings.json
+  mute|unmute   sound off or on for Codex hooks (hook --sound)
+  codex-install    add animax hooks to ~/.codex/hooks.json (Codex CLI and IDE)
+  codex-uninstall  remove them again
 
 State dir: ${STATE_DIR}`);
 }
@@ -281,6 +435,10 @@ async function main() {
     case 'demo': runWatch({ demo: true }); break;
     case 'set': runSet(arg); break;
     case 'config': runConfig(); break;
+    case 'mute': runMute(false); break;
+    case 'unmute': runMute(true); break;
+    case 'codex-install': runCodexInstall(); break;
+    case 'codex-uninstall': runCodexUninstall(); break;
     default: usage();
   }
 }
