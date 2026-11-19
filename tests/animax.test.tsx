@@ -121,14 +121,16 @@ test('an idle pane says it is waiting', async ($, on) => {
 
 test('/animax mute, unmute and sound answer with text', async ($, on) => {
   const saved: unknown[] = []
+  // A plugin installed from a marketplace names its rows <name>@<marketplace>.<field>.
+  on('config.list', () => ({ value: [{ key: 'animax@hanschh.sound', label: 'animax sound', kind: 'boolean', value: true, isLocked: false }] as never }))
   on('config.set', (_$, e) => {
-    saved.push(e.value)
+    saved.push(`${e.key}=${String(e.value)}`)
     return { value: e.value }
   })
   expect((await $.command.run({ command: 'animax', args: 'mute' } as never)).text).toBe('animax muted.')
   expect((await $.command.run({ command: 'animax', args: 'sound' } as never)).text).toContain('off')
   expect((await $.command.run({ command: 'animax', args: 'unmute' } as never)).text).toBe('animax sound on.')
-  expect(saved).toEqual([false, true])
+  expect(saved).toEqual(['animax@hanschh.sound=false', 'animax@hanschh.sound=true'])
 })
 
 test('/animax mute still mutes when the setting cannot be saved', async $ => {

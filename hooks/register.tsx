@@ -245,7 +245,17 @@ export const register: Register = (on, opts) => {
       const text = sound ? 'animax sound on.' : 'animax muted.'
       let problem: string | undefined
       try {
-        problem = (await $.config.set({ key: 'animax.sound', value: sound })).deny
+        // The row's key is `<plugin>.sound`, and the plugin's name can carry its
+        // marketplace (`animax@hanschh`), so look it up rather than guess.
+        const rows = await $.config.list()
+        const row =
+          rows.find(r => r.key === 'animax.sound') ??
+          rows.find(r => /^animax(@[^.]+)?\.sound$/.test(r.key))
+        if (row) problem = (await $.config.set({ key: row.key, value: sound })).deny
+        else {
+          const ours = rows.filter(r => r.key.startsWith('animax')).map(r => r.key)
+          problem = `no animax sound row in /config${ours.length ? ` (found ${ours.join(', ')})` : ''}`
+        }
       } catch (err) {
         problem = err instanceof Error ? err.message : String(err)
       }

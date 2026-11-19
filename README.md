@@ -102,6 +102,30 @@ claude plugin update animax@hanschh
 claude plugin uninstall animax@hanschh
 ```
 
+### Automatic updates
+
+Claude Code does not update plugins from third-party marketplaces on its own,
+and a marketplace cannot turn that on for you. To get new animax versions
+automatically, turn it on once, in either of these ways:
+
+- In a terminal `claude` session, run `/plugin`, open the **Marketplaces** tab,
+  select `hanschh` and turn on auto-update.
+- Or add `"autoUpdate": true` to the `hanschh` entry in `~/.claude/settings.json`:
+
+  ```json
+  {
+    "extraKnownMarketplaces": {
+      "hanschh": {
+        "source": { "source": "github", "repo": "hanschh/animax" },
+        "autoUpdate": true
+      }
+    }
+  }
+  ```
+
+Claude Code then checks for updates in the background after a session starts.
+A new version loads in your next session.
+
 ## Development (load from a local clone)
 
 Only for working on animax itself. Replace the path with wherever you cloned
