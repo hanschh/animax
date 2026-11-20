@@ -34,6 +34,9 @@ const PLAYER_FILE = path.join(STATE_DIR, 'player.json'); // the looping soundtra
 const HOME_DIR = path.join(os.homedir(), '.animax');
 const CONFIG_FILE = path.join(HOME_DIR, 'config.json'); // { sound: false } after `mute`
 const CODEX_COPY = path.join(HOME_DIR, 'codex'); // the copy Codex hooks run
+// The person's own character, built by /animax video: video.json (null after
+// /animax video reset), audio/<state>.wav. Shared with hooks/register.tsx.
+const CUSTOM_DIR = path.join(HOME_DIR, 'video');
 const CODEX_HOOKS = path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'hooks.json');
 const ROOT = path.join(__dirname, '..');
 const STALE_MS = 10 * 60 * 1000; // a non-idle state this old means a crashed session
@@ -55,6 +58,17 @@ function readJson(file) {
   } catch {
     return null;
   }
+}
+
+let custom; // CUSTOM_DIR/video.json, read once: undefined until then, null for none
+
+/** The person's own clip for `state`, or null to use the built-in one. */
+function customClip(state) {
+  if (custom === undefined) {
+    const v = readJson(path.join(CUSTOM_DIR, 'video.json'));
+    custom = v && v.states ? v : null;
+  }
+  return (custom && custom.states[state]) || null;
 }
 
 function writeJsonAtomic(file, data) {
@@ -170,7 +184,9 @@ function stopPlayer() {
 }
 
 function startPlayer(state) {
-  const wav = path.join(ROOT, 'assets', 'audio', `${state}.wav`);
+  const wav = customClip(state)
+    ? path.join(CUSTOM_DIR, 'audio', `${state}.wav`)
+    : path.join(ROOT, 'assets', 'audio', `${state}.wav`);
   if (!fs.existsSync(wav)) return stopPlayer();
   const p = readJson(PLAYER_FILE);
   if (p && p.state === state && isAlive(p.pid)) return; // already looping this one
@@ -426,6 +442,13 @@ async function main() {
       video = (await import(pathToFileURL(path.join(__dirname, '..', 'assets', 'video.mjs')).href)).VIDEO;
     } catch {
       video = null; // ASCII fallback
+    }
+    // The person's own character, state by state, over the built-in one.
+    const own = core.STATES.filter(s => customClip(s));
+    if (own.length) {
+      const states = { ...(video ? video.states : {}) };
+      for (const s of own) states[s] = customClip(s);
+      video = { fps: custom.fps || (video && video.fps) || 8, states };
     }
   }
   switch (cmd) {

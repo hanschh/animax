@@ -22,6 +22,39 @@ soundtrack. animax works in the terminal CLI and in the VS Code chat panel.
   Claude finishes. `/animax mute` and `/animax unmute` turn it off and on.
   Closing the animax panel (its X, or `/animax`) also silences it until you
   open the panel again.
+- **`/animax video <folder>`**: swaps in your own character. See below.
+
+## Use your own character
+
+Put one video per state in a folder, with the state's word in each file name,
+and run `/animax video` with that folder:
+
+```
+/animax video D:\Videos\my-cat
+/animax video ~/Videos/my-cat --seconds=4
+/animax video          # which character is in use
+/animax video reset    # back to the built-in one
+```
+
+| State    | Word in the file name | Example                    |
+| -------- | --------------------- | -------------------------- |
+| idle     | `idle`                | `Cat - Idle.mp4`           |
+| thinking | `think`               | `Cat - Thinking.mp4`       |
+| planning | `plan`                | `Cat - Planning.mp4`       |
+| coding   | `cook` or `code`      | `Cat - Cooking Code.mp4`   |
+| testing  | `test` or `debug`     | `Cat - Testing code.mp4`   |
+
+- mp4, mov, m4v, webm, mkv, avi and gif all work. A state without a video keeps
+  the built-in character for that state.
+- The video's sound becomes that state's soundtrack.
+- A solid background (the colour in the corners) is made transparent, and the
+  character is cropped. A plain, single-colour background works best.
+- `--seconds=N` sets how much of each video is used (default 8, at most 30).
+- This needs [ffmpeg](https://ffmpeg.org/) on PATH (or `FFMPEG` set to it) and
+  `node`, only while building. It takes a few seconds.
+- The result goes to `~/.animax/video/`, with a preview of each state in
+  `~/.animax/video/preview/`. It stays through plugin updates. The watch pane
+  and Codex use it too.
 
 ## Settings (`/config`, or `pluginConfigs.animax.options` in settings.json)
 
@@ -44,7 +77,7 @@ To turn sound off in `~/.claude/settings.json`:
 { "pluginConfigs": { "animax": { "options": { "sound": false } } } }
 ```
 
-## Build the video assets (once, and again after changing a video)
+## Build the built-in video assets (for plugin developers)
 
 The plugin plays pre-converted frames, so it needs no ffmpeg at runtime. Building
 them needs ffmpeg:
@@ -52,11 +85,15 @@ them needs ffmpeg:
 ```
 node scripts/build-assets.mjs            # reads ../video/pixel-bot-*.mp4
 node scripts/build-assets.mjs --keep-bg  # keep the video background
-node scripts/build-assets.mjs ../video/8sec-build --seconds=8  # other folder, longer clips
+node scripts/build-assets.mjs ../video/slime --seconds=8  # other folder, longer clips
+node scripts/build-assets.mjs ../video/slime --out=DIR    # what /animax video runs
 ```
 
 `--seconds=N` sets how much of each video is used (default 4, at 8 fps). The
-files in the folder must be named as in the table below.
+built-in assets need all five states. The files can be named as in the table
+below, or carry the state's word as in
+[Use your own character](#use-your-own-character). The built-in character is
+currently the slime.
 
 Set `FFMPEG=C:\path\to\ffmpeg.exe` if ffmpeg is not on PATH. The script writes
 `assets/video.mjs` and `assets/audio/*.wav`, plus previews in `build/preview/`.

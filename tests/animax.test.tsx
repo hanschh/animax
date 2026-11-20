@@ -196,3 +196,66 @@ test('closing the pane stops the sound until it is opened again', async ($, on) 
   await clock.advance(1000)
   expect(plays.length).toBeGreaterThan(0)
 })
+
+// ~/.animax/video as /animax video leaves it: the person's own clips, over the built-in ones.
+function customWorld(on: TestOn, failure?: string) {
+  engine(on)
+  mock.env(on, { USERPROFILE: 'C:/Users/me' })
+  const runs: string[][] = []
+  // The engine hands the hooks a path in the platform's own spelling.
+  const files = new Map<string, string>()
+  const key = (p: string) => p.replace(/[\\/]+/g, '/')
+  on('process.run', (_$, e) => {
+    runs.push([...e.argv])
+    if (failure) return { value: { exitCode: 1, stdout: '', stderr: `animax build-assets: ${failure}` } as never }
+    const out = e.argv.find(a => a.startsWith('--out='))!.slice('--out='.length)
+    const coding = { ...VIDEO!.states.coding, svg: '<svg id="mine"/>', audio: 'audio/coding.wav' }
+    files.set(key(`${out}/video.json`), JSON.stringify({ fps: 8, source: e.argv[2], states: { coding } }))
+    return { value: { exitCode: 0, stdout: 'coding    <- Me - Cooking.mp4\nno video for: idle\n', stderr: '' } as never }
+  })
+  on('fs.stat', (_$, e) => {
+    const text = files.get(key(e.path))
+    if (text === undefined) throw new Error('ENOENT')
+    return { value: { kind: 'file', size: text.length, mtimeMs: 0, isLink: false } as never }
+  })
+  on('fs.read', (_$, e) => {
+    const text = files.get(key(e.path))
+    if (text === undefined) throw new Error('ENOENT')
+    return { value: text as never }
+  })
+  on('fs.exists', (_$, e) => ({ value: files.has(key(e.path)) }))
+  on('fs.write', (_$, e) => {
+    files.set(key(e.path), e.text)
+    return { value: undefined }
+  })
+  return { runs }
+}
+
+async function paneSvg($: Parameters<Extract<Parameters<typeof test>[1], (...args: any[]) => any>>[0]) {
+  await $.tool.call({ tool: 'Write', file_path: '/x/hello.js', content: '' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
+  const svg = await ui.find({ type: 'Svg' })
+  await ui.unmount()
+  return String((svg as { props?: { source?: string } } | undefined)?.props?.source ?? '')
+}
+
+test('/animax video builds the person\'s own character and draws it', async ($, on) => {
+  if (!VIDEO) return
+  const { runs } = customWorld(on)
+  const built = await $.command.run({ command: 'animax', args: 'video "D:/My Videos/Slime" --seconds=6' } as never)
+  expect(built.text).toContain('your character is in')
+  expect(built.text).toContain('Me - Cooking.mp4')
+  expect(runs[0]!.slice(2)).toEqual(['D:/My Videos/Slime', '--seconds=6', '--out=C:/Users/me/.animax/video'])
+  expect(await paneSvg($)).toContain('mine')
+
+  expect((await $.command.run({ command: 'animax', args: 'video' } as never)).text).toContain('your own')
+  expect((await $.command.run({ command: 'animax', args: 'video reset' } as never)).text).toContain('built-in')
+  expect(await paneSvg($)).not.toContain('mine')
+})
+
+test('/animax video says why a build failed', async ($, on) => {
+  customWorld(on, 'no videos found in D:/empty')
+  const failed = await $.command.run({ command: 'animax', args: 'video D:/empty' } as never)
+  expect(failed.text).toContain('no videos found')
+  expect(failed.text).toContain('/animax video <folder>')
+})

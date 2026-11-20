@@ -7,6 +7,8 @@
 //   pane, opened by itself, as a self-animating SVG sprite.
 // - /animax: shows or hides that pane (anywhere).
 // - /animax mute | unmute: the soundtrack of each state, looped while it lasts.
+// - /animax video <folder> | reset: the person's own character, built from
+//   their videos into ~/.animax/video, in place of the built-in one.
 //
 // Without built assets (assets/video.mjs is null) it falls back to ASCII art.
 
@@ -14,13 +16,12 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren, Timer } from 'claude-code'
 
 import { VIDEO } from '../assets/video.mjs'
-import type { VideoClip } from '../assets/video.mjs'
+import type { VideoClip, VideoState } from '../assets/video.mjs'
 import { ACTIVE_HOLD_MS, ACTIVE_STATES, FRAMES, META, MINI, classifyTool, pick } from '../scripts/core.mjs'
 import { frameIndices, rasterCells } from '../scripts/pixels.mjs'
 import type { AnimaxState, AnimaxStatus } from '../types'
 
 const PANE = 'animax'
-const TICK_MS = VIDEO ? Math.round(1000 / VIDEO.fps) : 250
 const AUDIO_SETTLE_MS = 400 // ignore states that flick past faster than this
 const IDLE: AnimaxStatus = { state: 'idle', detail: '' }
 const WIDGET_PX = 72 // editor height of the bot in a small widget seat
@@ -45,6 +46,14 @@ let paneHidden = false // the person closed the pane: no sound until it opens ag
 const SOUND_KEY = 'sound' // $.store: the last /animax mute (false) or unmute (true)
 const cellCache = new Map<string, string>()
 
+type Video = { fps: number; states: Partial<Record<VideoState, VideoClip>> }
+let video: Video | null = VIDEO // the built-in clips, with the person's own over them
+let customDir: string | null = null // ~/.animax/video, when its clips are in use
+let customStates = new Set<string>() // the states drawn from customDir
+let customSource = '' // the folder the person's videos came from
+
+const tickMs = () => (video ? Math.round(1000 / video.fps) : 250)
+
 // ─── state ──────────────────────────────────────────────────────────────────
 
 async function setStatus($: EngineInterface, next: AnimaxStatus) {
@@ -68,7 +77,7 @@ async function advanceFrame($: EngineInterface) {
 async function syncTicker($: EngineInterface) {
   const shouldTick = (await read($, isWorking)) || (await read($, isPaneOpen))
   if (shouldTick && !ticker) {
-    ticker = $.clock.every(TICK_MS, () => {
+    ticker = $.clock.every(tickMs(), () => {
       void advanceFrame($)
     })
   } else if (!shouldTick && ticker) {
@@ -144,15 +153,18 @@ function scheduleAudio($: EngineInterface, state: AnimaxState) {
 }
 
 async function playAudio($: EngineInterface, state: AnimaxState) {
-  const clip = VIDEO?.states[state]?.audio
+  const clip = video?.states[state]?.audio
   if (!clip || !options.sound || paneHidden || state === audioState) return
   haltAudio()
   audioState = state
+  // The person's own clip lives outside the plugin; a built-in one is an asset.
+  const own = customDir !== null && customStates.has(state)
+  const base = own ? customDir! : $.plugin.root
   try {
     platform ??= (await $.session.info()).platform ?? 'unknown'
     if (platform === 'windows') {
       // $.audio.play has no player on a Windows terminal; SoundPlayer does.
-      const file = `${$.plugin.root}\\${clip.replaceAll('/', '\\')}`.replaceAll("'", "''")
+      const file = `${base}\\${clip}`.replaceAll('/', '\\').replaceAll("'", "''")
       const script =
         `$p = New-Object System.Media.SoundPlayer '${file}'; $p.PlayLooping(); Start-Sleep -Seconds 3600`
       const child = $.process.spawn({
@@ -166,7 +178,11 @@ async function playAudio($: EngineInterface, state: AnimaxState) {
     } else {
       const ctrl = new AbortController()
       stopAudio = () => ctrl.abort()
-      void $.audio.play({ asset: clip }, { shouldLoop: true, signal: ctrl.signal }).catch(() => undefined)
+      const source = own
+        ? { base64: (await $.fs.read(`${base}/${clip}`, { as: 'bytes' })).base64, mime: 'audio/wav' }
+        : { asset: clip }
+      if (ctrl.signal.aborted) return
+      void $.audio.play(source, { shouldLoop: true, signal: ctrl.signal }).catch(() => undefined)
     }
   } catch {
     haltAudio()
@@ -204,6 +220,138 @@ function editorSize(clip: VideoClip, height: number) {
   return { width: Math.round((height * clip.large.w) / clip.large.h), height }
 }
 
+// ─── the person's own character ─────────────────────────────────────────────
+
+const READ_LIMIT = 4 * 1024 * 1024 // what one $.fs.read answers at most
+
+/** ~/.animax/video: /animax video builds there, and the watch pane reads it too. */
+async function customFolder($: EngineInterface) {
+  return `${await homeFolder($)}/.animax/video`
+}
+
+async function homeFolder($: EngineInterface) {
+  const home = (await $.env.get('USERPROFILE')) || (await $.env.get('HOME'))
+  if (!home) throw new Error('no home folder (neither USERPROFILE nor HOME is set)')
+  return home.replace(/[\\/]+$/, '')
+}
+
+/** A text file of any size, read in ranges (ASCII JSON: no character is cut). */
+async function readText($: EngineInterface, file: string) {
+  const { size } = await $.fs.stat(file)
+  if (size <= READ_LIMIT) return (await $.fs.read(file)) as string
+  let text = ''
+  for (let offset = 0; offset < size; offset += READ_LIMIT) {
+    text += (await $.fs.read(file, { offset, length: READ_LIMIT })) as string
+  }
+  return text
+}
+
+/**
+ * Draw the clips in `dir` (its video.json) over the built-in ones, or only the
+ * built-in ones when `dir` is null or holds none. Says whether `dir` was used.
+ */
+async function useCustom($: EngineInterface, dir: string | null) {
+  let own: (Video & { source?: string }) | null = null
+  if (dir) {
+    try {
+      const parsed = JSON.parse(await readText($, `${dir}/video.json`))
+      if (parsed && typeof parsed === 'object' && parsed.states) own = parsed
+    } catch {
+      // none built, or reset: the built-in character
+    }
+  }
+  const fps = video?.fps
+  cellCache.clear()
+  if (own) {
+    video = { fps: own.fps || VIDEO?.fps || 8, states: { ...VIDEO?.states, ...own.states } }
+    customDir = dir
+    customStates = new Set(Object.keys(own.states))
+    customSource = own.source ?? ''
+  } else {
+    video = VIDEO
+    customDir = null
+    customStates = new Set()
+    customSource = ''
+  }
+  if (ticker && video?.fps !== fps) {
+    ticker.cancel() // tick at the new clips' pace
+    ticker = null
+    await syncTicker($)
+  }
+  return own !== null
+}
+
+const VIDEO_HELP =
+  'Use your own character: /animax video <folder> [--seconds=N]\n' +
+  'The folder holds one video per state, the state in its name: idle, thinking, planning, ' +
+  'coding (or cooking), testing. A state without a video keeps the built-in one. Needs ffmpeg.\n' +
+  'Back to the built-in character: /animax video reset'
+
+/** /animax video [<folder> [--seconds=N] | reset]: what it answers. */
+async function runVideo($: EngineInterface, rest: string): Promise<string> {
+  const secondsArg = rest.match(/(?:^|\s)--seconds=(\S+)/)
+  const seconds = secondsArg ? Number(secondsArg[1]) : 8
+  let folder = rest
+    .replace(/(?:^|\s)--seconds=\S+/, '')
+    .trim()
+    .replace(/^(["'])(.*)\1$/, '$2')
+
+  if (folder === '') {
+    const now = customDir
+      ? `animax character: your own${customSource ? `, from ${customSource}` : ''} (${[...customStates].join(', ')}).`
+      : 'animax character: the built-in one.'
+    return `${now}\n${VIDEO_HELP}`
+  }
+
+  const dir = await customFolder($)
+  if (/^(reset|default|built-?in|off)$/i.test(folder)) {
+    haltAudio()
+    if (await $.fs.exists(`${dir}/video.json`)) await $.fs.write(`${dir}/video.json`, 'null')
+    await useCustom($, null)
+    await refresh($)
+    return 'animax: back to the built-in character.'
+  }
+
+  if (!(seconds > 0 && seconds <= 30)) return 'animax: --seconds must be more than 0 and at most 30.'
+  if (/^~(?=[\\/]|$)/.test(folder)) folder = (await homeFolder($)) + folder.slice(1)
+
+  haltAudio() // Windows locks a WAV while it plays, and the build rewrites it
+  let run
+  try {
+    run = await $.process.run(
+      ['node', `${$.plugin.root}/scripts/build-assets.mjs`, folder, `--seconds=${seconds}`, `--out=${dir}`],
+      { timeoutMs: 600_000 },
+    )
+  } catch (err) {
+    return `animax: could not run node to build the video (${err instanceof Error ? err.message : String(err)}).`
+  }
+  if (run.exitCode !== 0) {
+    const why = (run.stderr || run.stdout).trim().replace(/^animax build-assets: /, '')
+    return `animax: could not build your character: ${why}\n${VIDEO_HELP}`
+  }
+  if (!(await useCustom($, dir))) return `animax: the build wrote nothing readable to ${dir}.`
+  await refresh($)
+
+  const picked = run.stdout
+    .split(/\r?\n/)
+    .filter(l => l.includes(' <- ') || l.startsWith('no video for'))
+    .map(l => `  ${l.trim()}`)
+  return [
+    'animax: your character is in.',
+    ...picked,
+    `Previews: ${dir}/preview. Back to the built-in one: /animax video reset`,
+  ].join('\n')
+}
+
+/** Draw again with the clips now in use. */
+async function refresh($: EngineInterface) {
+  try {
+    await $.ui.invalidate('ui.render')
+  } catch {
+    // the next frame draws them anyway
+  }
+}
+
 // ─── hooks ──────────────────────────────────────────────────────────────────
 
 export const register: Register = (on, opts) => {
@@ -216,9 +364,15 @@ export const register: Register = (on, opts) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'animax',
-      description: 'animax: show/hide the pane; "/animax mute" or "/animax unmute" for sound',
+      description:
+        'animax: show/hide the pane; "/animax mute" or "/animax unmute" for sound; "/animax video <folder>" for your own character',
     })
     paneHidden = await read($, isPaneDismissed) // module variables start over on a reload
+    try {
+      await useCustom($, await customFolder($)) // the person's own character, if built
+    } catch {
+      // the built-in one
+    }
     // /animax mute or unmute, saved in an earlier session, wins over the setting.
     try {
       const saved = await $.store.get(SOUND_KEY)
@@ -244,7 +398,16 @@ export const register: Register = (on, opts) => {
   })
 
   on('command.run', { command: 'animax' }, async ($, e) => {
-    const arg = (e.args ?? '').trim().toLowerCase()
+    const raw = (e.args ?? '').trim()
+    const arg = raw.toLowerCase()
+    const word = arg.split(/\s+/)[0]
+    if (word === 'video') {
+      try {
+        return { text: await runVideo($, raw.slice(word.length).trim()) }
+      } catch (err) {
+        return { text: `animax video: ${err instanceof Error ? err.message : String(err)}` }
+      }
+    }
     if (arg === 'mute' || arg === 'unmute') {
       const sound = arg === 'unmute'
       // Apply it now, whatever happens to the saved choice.
@@ -348,7 +511,7 @@ export const register: Register = (on, opts) => {
     const state: AnimaxState = now.state === 'idle' ? 'thinking' : now.state
     const { Box, Text } = $.ui.resolve(e)
     const m = META[state]
-    const clip = VIDEO?.states[state]
+    const clip = video?.states[state]
 
     let art
     if (clip && e.surface === 'terminal') {
@@ -392,7 +555,7 @@ export const register: Register = (on, opts) => {
     const { Box, Text } = $.ui.resolve(e)
     const now = await read($, status)
     const m = META[now.state]
-    const clip = VIDEO?.states[now.state]
+    const clip = video?.states[now.state]
     const isIdle = now.state === 'idle'
 
     // Bot on the left, what it is doing on the right: one short row.

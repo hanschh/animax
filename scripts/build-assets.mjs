@@ -1,21 +1,29 @@
 #!/usr/bin/env node
 // animax asset builder: turns the pixel-bot videos into what the plugin draws.
 //
-//   node scripts/build-assets.mjs [videoDir] [--seconds=N] [--keep-bg] [--synthetic]
+//   node scripts/build-assets.mjs [videoDir] [--seconds=N] [--keep-bg] [--out=DIR] [--synthetic]
 //
 // videoDir    defaults to ../video next to the plugin folder
 // --seconds=N how many seconds of each video to use (default 4)
 // --keep-bg   keep the video's background instead of making it transparent
+// --out=DIR   write a user's own character to DIR instead of the plugin's assets
 // --synthetic write generated test frames (no ffmpeg, no audio), for tests
+//
+// Videos are found by name: the plugin's own names (pixel-bot-idle.mp4, ...)
+// first, else any video whose name holds the state's word: idle, think, plan,
+// cook or code, test or debug ("Slime - Testing code.mp4" is testing). With
+// --out, a state with no video keeps the built-in character for that state.
 //
 // Needs ffmpeg: on PATH, or point FFMPEG at the executable.
 //
-// Writes:
+// Writes, without --out:
 //   assets/video.mjs          palette-indexed frames + an animated SVG per state
 //   assets/audio/<state>.wav  each video's soundtrack (mono 22 kHz PCM)
 //   build/preview/<state>.png contact sheet to eyeball the result
+// With --out=DIR (what /animax video runs):
+//   DIR/video.json, DIR/audio/<state>.wav, DIR/preview/<state>.png
 //
-// Run it again whenever a video changes. The plugin needs no ffmpeg at runtime.
+// Run it again whenever a video changes. The plugin needs no ffmpeg to play it.
 
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -28,6 +36,7 @@ const args = process.argv.slice(2)
 const flags = new Set(args.filter(a => a.startsWith('--')))
 const VIDEO_DIR = path.resolve(args.find(a => !a.startsWith('--')) ?? path.join(ROOT, '..', 'video'))
 const FFMPEG = process.env.FFMPEG || 'ffmpeg'
+const OUT = args.find(a => a.startsWith('--out='))?.slice('--out='.length) || null
 
 const FPS = 8
 const SECONDS = Number(args.find(a => a.startsWith('--seconds='))?.split('=')[1] ?? 4)
@@ -40,13 +49,47 @@ const MAX_COLORS = 63 // + index 0, which is "transparent"
 const BG_TOLERANCE = 48 // RGB distance from the corner colour that counts as background
 const SVG_LIMIT = 131072 // characters an Svg element accepts
 
-// The videos, one per state. pixel-bot-loops.mp4 (all states joined) is not used.
+// The plugin's own video names, one per state. pixel-bot-loops.mp4 (all
+// states joined) is not used.
 const SOURCES = {
   idle: 'pixel-bot-idle.mp4',
   thinking: 'pixel-bot-thinking.mp4',
   planning: 'pixel-bot-planning.mp4',
   coding: 'pixel-bot-cooking-code.mp4',
   testing: 'pixel-bot-testing-code.mp4',
+}
+const STATES = Object.keys(SOURCES)
+
+// Any other name: the state's word in it. Testing goes before coding, so
+// "testing code" is testing and "cooking code" is coding.
+const WORDS = [
+  ['idle', /idle/],
+  ['thinking', /think/],
+  ['planning', /plan/],
+  ['testing', /test|debug/],
+  ['coding', /cook|cod(e|ing)/],
+]
+const VIDEO_EXT = /\.(mp4|mov|m4v|webm|mkv|avi|gif)$/i
+
+/** state -> video file in `dir`, for the states a video was found for. */
+function findVideos(dir) {
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw new Error(`not a folder: ${dir}`)
+  const names = fs.readdirSync(dir).filter(n => VIDEO_EXT.test(n) && !/loops/i.test(n)).sort()
+  const found = {}
+  for (const [state, name] of Object.entries(SOURCES)) {
+    if (names.includes(name)) found[state] = name
+  }
+  if (Object.keys(found).length === 0) {
+    const taken = new Set()
+    for (const [state, word] of WORDS) {
+      const name = names.find(n => !taken.has(n) && word.test(n.toLowerCase()))
+      if (name) {
+        found[state] = name
+        taken.add(name)
+      }
+    }
+  }
+  return Object.fromEntries(STATES.filter(s => found[s]).map(s => [s, path.join(dir, found[s])]))
 }
 
 // ─── decoding ───────────────────────────────────────────────────────────────
@@ -336,8 +379,28 @@ function previewPng(frames, width, height, palette) {
 function main() {
   const isSynthetic = flags.has('--synthetic')
   const keepBg = flags.has('--keep-bg')
-  const audioDir = path.join(ROOT, 'assets', 'audio')
-  const previewDir = path.join(ROOT, 'build', 'preview')
+  const outDir = OUT ? path.resolve(OUT) : null
+  const audioDir = outDir ? path.join(outDir, 'audio') : path.join(ROOT, 'assets', 'audio')
+  const audioRef = outDir ? 'audio' : 'assets/audio' // how the output names a WAV
+  const previewDir = outDir ? path.join(outDir, 'preview') : path.join(ROOT, 'build', 'preview')
+
+  const sources = isSynthetic ? Object.fromEntries(STATES.map(s => [s, null])) : findVideos(VIDEO_DIR)
+  const found = Object.keys(sources)
+  if (found.length === 0) {
+    throw new Error(
+      `no videos found in ${VIDEO_DIR}. Put the state in each file name: idle, thinking, planning, coding (or cooking), testing`,
+    )
+  }
+  const missing = STATES.filter(s => !found.includes(s))
+  if (missing.length && !outDir) {
+    throw new Error(`the plugin's own assets need all five videos; missing: ${missing.join(', ')}`)
+  }
+  for (const state of found) {
+    console.log(`${state.padEnd(9)} <- ${sources[state] ? path.basename(sources[state]) : 'synthetic'}`)
+  }
+  if (missing.length) console.log(`no video for: ${missing.join(', ')} (the built-in character stays there)`)
+  console.log('')
+
   fs.mkdirSync(audioDir, { recursive: true })
   fs.mkdirSync(previewDir, { recursive: true })
 
@@ -345,9 +408,8 @@ function main() {
   // them, so it keeps its size and place when the state changes.
   const work = {}
   const box = { x0: WORK, y0: WORK, x1: -1, y1: -1 }
-  for (const [state, file] of Object.entries(SOURCES)) {
-    const src = path.join(VIDEO_DIR, file)
-    if (!isSynthetic && !fs.existsSync(src)) throw new Error(`missing video: ${src}`)
+  for (const state of found) {
+    const src = sources[state]
     const frames = isSynthetic ? synthetic(state, WORK) : decode(src, WORK)
     const bg = cornerColour(frames[0], WORK)
     work[state] = { src, frames, bg }
@@ -364,12 +426,12 @@ function main() {
 
   // Pass 2: crop, scale, reduce colours, encode.
   const states = {}
-  for (const state of Object.keys(SOURCES)) {
-    const { src, frames, bg: found } = work[state]
+  for (const state of found) {
+    const { src, frames, bg: corner } = work[state]
     const rgb = {}
-    for (const [k, d] of Object.entries(dims)) rgb[k] = frames.map(f => cropScale(f, rect, d.w, d.h, found))
+    for (const [k, d] of Object.entries(dims)) rgb[k] = frames.map(f => cropScale(f, rect, d.w, d.h, corner))
 
-    const bg = keepBg ? null : found
+    const bg = keepBg ? null : corner
     const palette = buildPalette([rgb.small, rgb.large], bg)
     const idx = {
       small: indexFrames(rgb.small, palette, bg),
@@ -389,7 +451,7 @@ function main() {
     const wav = path.join(audioDir, `${state}.wav`)
     if (!isSynthetic && hasAudio(src)) {
       extractAudio(src, wav)
-      audio = `assets/audio/${state}.wav`
+      audio = `${audioRef}/${state}.wav`
     } else if (fs.existsSync(wav)) {
       fs.unlinkSync(wav)
     }
@@ -411,14 +473,25 @@ function main() {
     )
   }
 
-  const header =
-    '// Generated by scripts/build-assets.mjs. Do not edit; run the script again.\n' +
-    `// Source: ${isSynthetic ? 'synthetic test pattern' : 'pixel-bot videos'}\n`
-  const body = `export const VIDEO = ${JSON.stringify({ fps: FPS, states })}\n`
-  const out = path.join(ROOT, 'assets', 'video.mjs')
-  fs.writeFileSync(out, header + body)
-  console.log(`\nwrote ${path.relative(ROOT, out)} (${(fs.statSync(out).size / 1024).toFixed(0)} KB)`)
-  console.log(`previews in ${path.relative(ROOT, previewDir)}`)
+  // A state without a video of its own drops an old WAV too.
+  for (const state of missing) {
+    const wav = path.join(audioDir, `${state}.wav`)
+    if (fs.existsSync(wav)) fs.unlinkSync(wav)
+  }
+
+  let out
+  if (outDir) {
+    out = path.join(outDir, 'video.json')
+    fs.writeFileSync(out, JSON.stringify({ fps: FPS, source: path.resolve(VIDEO_DIR), states }))
+  } else {
+    const header =
+      '// Generated by scripts/build-assets.mjs. Do not edit; run the script again.\n' +
+      `// Source: ${isSynthetic ? 'synthetic test pattern' : `${path.basename(path.resolve(VIDEO_DIR))} videos`}\n`
+    out = path.join(ROOT, 'assets', 'video.mjs')
+    fs.writeFileSync(out, header + `export const VIDEO = ${JSON.stringify({ fps: FPS, states })}\n`)
+  }
+  console.log(`\nwrote ${out} (${(fs.statSync(out).size / 1024).toFixed(0)} KB)`)
+  console.log(`previews in ${previewDir}`)
 }
 
 try {

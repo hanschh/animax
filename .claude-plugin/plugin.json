@@ -1,7 +1,7 @@
 {
   "name": "animax",
-  "description": "Pixel-bot animation and sound for Claude Code: thinking, planning, coding and testing, in the terminal and the VS Code chat.",
-  "version": "1.5.1",
+  "description": "Slime animation (or your own character) and sound for Claude Code: thinking, planning, coding and testing, in the terminal and the VS Code chat.",
+  "version": "1.6.0",
   "author": {
     "name": "hanschh",
     "url": "https://github.com/hanschh"

@@ -11,6 +11,13 @@ skill. You cannot run that command for the user. Tell them to type it:
 - `/animax`: show or hide the animax pane
 - `/animax mute` / `/animax unmute`: sound off or on (saved for terminal and VS Code)
 - `/animax sound`: show whether sound is on
+- `/animax video <folder> [--seconds=N]`: use their own character, built from
+  one video per state in that folder. The state's word must be in each file name:
+  `idle`, `think`, `plan`, `cook`/`code`, `test`/`debug`. Needs ffmpeg on PATH.
+  A state without a video keeps the built-in one. The result is saved in
+  `~/.animax/video/` (previews in `preview/` there).
+- `/animax video`: which character is in use; `/animax video reset`: back to the
+  built-in one
 
 If they would rather have it in settings, `sound` can also be set to `false` under
 `pluginConfigs.animax.options` in `~/.claude/settings.json`. Ask before you edit
@@ -71,3 +78,8 @@ The command hooks in `hooks/hooks.json` write the state to `<os tmpdir>/animax/`
   `<tmpdir>/animax/current.json` updates during a turn. If it does not, the
   command hooks are not running. Check `/hooks`, and check that `node` is on PATH.
 - `NO_COLOR=1` turns off ANSI colours in the terminal animator.
+- If `/animax video` fails with "cannot run ffmpeg", install ffmpeg or set
+  `FFMPEG` to its full path. "no videos found" means no file name in that
+  folder has a state's word in it.
+- If their own character has a box around it, the video background is not one
+  plain colour. Suggest a video with a solid background.
